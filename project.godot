@@ -6,6 +6,10 @@ config/name="Idle Delivery Manager"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.5", "GL Compatibility")
 
+[autoload]
+
+ThemeService="*res://scripts/services/theme_service.gd"
+
 [display]
 
 window/size/viewport_width=390

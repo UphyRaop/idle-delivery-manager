@@ -23,6 +23,11 @@ The project starts from a 390 × 844 portrait viewport and supports sensor-based
 - `export_presets.cfg` defines the Web export.
 - `scripts/export-web.sh` imports, exports, and verifies the game. It stages the generated HTML, JavaScript, WebAssembly, game pack, and Pages files in `build/web`.
 - `.github/workflows/pages.yml` builds pull requests and uploads the export as the `github-pages` artifact. Pushes to `main` and manual runs on `main` also deploy that artifact.
+- `scripts/domain/` and `scripts/services/` contain the staged domain foundations (integer-sen ledger, fixed-step clock, versioned save adapter, theme tokens).
+- `tests/run_tests.gd` is the headless regression runner for those foundations. Run it with `godot --headless --path . --script tests/run_tests.gd`.
+- `docs/architecture.md` records module contracts, migration safety, and the geographic data decision.
+
+The current game remains the original parcel prototype with a clearly labeled fictional map. The new foundations are being integrated incrementally; they do not yet constitute the complete approved redesign.
 
 ## GitHub Pages
 
