@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07121f">
+  <title>$GODOT_PROJECT_NAME</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2307121f'/%3E%3Cpath d='M7 24h8V9h10' fill='none' stroke='%2354e6ff' stroke-width='3'/%3E%3C/svg%3E">
+  $GODOT_HEAD_INCLUDE
+  <style>
+    :root { color-scheme: dark; background: #07121f; color: #f0f8ff; font-family: system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; overflow: hidden; }
+    #canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; }
+    #canvas:focus { outline: none; }
+    #loading {
+      position: fixed; inset: 0; overflow: auto;
+      isolation: isolate; background: #07121f;
+      transition: opacity 240ms ease;
+    }
+    #loading.leaving { opacity: 0; pointer-events: none; }
+    .map, .shade { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: -1; }
+    .shade {
+      background: linear-gradient(180deg, #07121fbb, transparent 28%, #07121f29 42%, #07121fee 72%, #07121f 100%);
+    }
+    .layout {
+      min-height: 100vh;
+      min-height: 100svh;
+      display: grid;
+      grid-template-rows: auto 1fr auto auto;
+      gap: clamp(14px, 4svh, 38px);
+      padding: max(18px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+        max(18px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+    }
+    header { justify-self: end; color: #b9d8e4; font: 600 11px ui-monospace, monospace; letter-spacing: .16em; }
+    main { grid-row: 3; width: min(100%, 500px); justify-self: center; }
+    h1 { margin: 0; font-size: clamp(26px, 6.3vw, 44px); line-height: 1.12; letter-spacing: -.045em; }
+    .subtitle { margin: 8px 0 26px; color: #81e6fa; font: 600 10px ui-monospace, monospace; letter-spacing: .15em; }
+    .status-line { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; font-size: 14px; }
+    #percent { color: #8aeeff; font: 600 13px ui-monospace, monospace; }
+    .track { height: 4px; overflow: hidden; border-radius: 4px; background: #22384a; margin: 10px 0; }
+    .fill { height: 100%; width: 100%; background: #54e6ff; transform: scaleX(0); transform-origin: left; }
+    .track:not([aria-valuenow]) .fill { width: 32%; animation: scan 2s ease-in-out infinite; }
+    #support { margin: 0; color: #bbcedb; font-size: 13px; line-height: 1.4; }
+    #retry {
+      margin-top: 13px; min-height: 44px; padding: 0 18px; border: 1px solid #54e6ff;
+      border-radius: 6px; background: #102c3c; color: #f0f8ff; font: inherit; cursor: pointer;
+    }
+    #retry:focus-visible { outline: 2px solid #f0f8ff; outline-offset: 3px; }
+    footer { grid-row: 4; color: #9bb2c3; font-size: 11px; line-height: 1.5; text-align: center; }
+    footer span { display: block; }
+    .route { fill: none; stroke: #37c9e5; stroke-width: 2; opacity: .58; }
+    .flow {
+      fill: none; stroke: #87f3ff; stroke-width: 2.5; stroke-linecap: round;
+      stroke-dasharray: 12 60; animation: flow 5s linear infinite;
+    }
+    .ring { fill: none; stroke: #58deef; transform-box: fill-box; transform-origin: center; animation: pulse 3s ease-out infinite; }
+    .light { animation: glow 7s ease-in-out infinite alternate; }
+    @keyframes flow { to { stroke-dashoffset: -72; } }
+    @keyframes pulse { from { opacity: .8; transform: scale(.7); } to { opacity: 0; transform: scale(2); } }
+    @keyframes glow { from { opacity: .32; } to { opacity: .72; } }
+    @keyframes scan { from { transform: translateX(-100%); } to { transform: translateX(315%); } }
+    @media (max-height: 480px) {
+      .layout { gap: 12px; }
+      .subtitle { margin-bottom: 13px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #loading { transition: none; }
+      .flow, .ring, .light, .track:not([aria-valuenow]) .fill { animation: none; }
+      .track:not([aria-valuenow]) .fill { transform: translateX(105%); }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="Idle Delivery Manager game"></canvas>
+  <div id="loading">
+    <svg class="map" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <pattern id="streets" width="83" height="67" patternUnits="userSpaceOnUse" patternTransform="rotate(-17)">
+          <path d="M0 1H83M1 0V67" stroke="#21364a" stroke-width="4"/>
+          <path d="M0 24H83M36 0V67M62 24V67M36 48H83" stroke="#182d42" fill="none" stroke-width="2"/>
+        </pattern>
+        <radialGradient id="district-light">
+          <stop stop-color="#164c62"/>
+          <stop offset="1" stop-color="#164c62" stop-opacity="0"/>
+        </radialGradient>
+        <path id="route-a" d="M-22 494L264 397 360 426 465 391 522 280 625 246 651 189 805 142 890 185 1218 86"/>
+        <path id="route-b" d="M35 123L238 175 320 151 418 200 513 164 562 187 625 246 705 301 805 272 875 317 1210 226"/>
+        <path id="route-c" d="M289 812L369 658 490 620 554 492 642 461 705 301 742 226 883 184"/>
+      </defs>
+      <rect width="1200" height="800" fill="#0b1a2a"/>
+      <rect width="1200" height="800" fill="url(#streets)"/>
+      <ellipse class="light" cx="610" cy="280" rx="480" ry="310" fill="url(#district-light)"/>
+      <path d="M-30 610C200 560 219 624 370 596S548 626 737 557 998 333 1230 381" fill="none" stroke="#162c3d" stroke-width="47"/>
+      <path d="M-30 610C200 560 219 624 370 596S548 626 737 557 998 333 1230 381" fill="none" stroke="#0b2232" stroke-width="41"/>
+      <g fill="none" stroke="#30475a" stroke-width="5">
+        <path d="M-20 229L247 315 451 255 581 78 939 -24M399 -10L478 134 422 235 463 385 610 535 629 820"/>
+        <path d="M-15 359L275 269 603 363 939 257 1209 329M739 -18L750 107 882 181 949 344 1120 490"/>
+        <path d="M1230 614L1003 560 890 632 646 568 465 637 191 557 -14 644M122 814L260 465 264 397 175 220 221 -18"/>
+      </g>
+      <g>
+        <use href="#route-a" class="route"/><use href="#route-b" class="route"/><use href="#route-c" class="route"/>
+        <use href="#route-a" class="flow"/><use href="#route-b" class="flow"/><use href="#route-c" class="flow"/>
+      </g>
+      <g fill="#a4f5ff">
+        <circle cx="465" cy="391" r="4"/><circle cx="625" cy="246" r="4"/>
+        <circle cx="705" cy="301" r="4"/><circle cx="513" cy="164" r="4"/>
+        <circle class="ring" cx="465" cy="391" r="8"/><circle class="ring" cx="625" cy="246" r="8"/>
+        <circle class="ring" cx="705" cy="301" r="8" style="animation-delay: -1s"/>
+        <circle class="ring" cx="513" cy="164" r="8" style="animation-delay: -2s"/>
+      </g>
+      <g fill="#d1faff" stroke="#0f627a" stroke-width="2">
+        <circle r="5"><animateMotion dur="17s" begin="-8s" repeatCount="indefinite"><mpath href="#route-a"/></animateMotion></circle>
+        <circle r="5"><animateMotion dur="21s" begin="-10s" repeatCount="indefinite"><mpath href="#route-b"/></animateMotion></circle>
+        <circle r="5"><animateMotion dur="16s" begin="-9s" repeatCount="indefinite"><mpath href="#route-c"/></animateMotion></circle>
+      </g>
+    </svg>
+    <div class="shade"></div>
+    <div class="layout">
+      <header>IDM / 2026</header>
+      <main>
+        <h1>Idle Delivery Manager™</h1>
+        <p class="subtitle">LOGISTICS MANAGEMENT SIMULATOR</p>
+        <div class="status-line">
+          <span id="status" role="status">Initializing engine</span>
+          <span id="percent" aria-hidden="true"></span>
+        </div>
+        <div class="track" id="progress" role="progressbar" aria-label="Game download"><div class="fill"></div></div>
+        <p id="support">Connecting to the delivery network.</p>
+        <button id="retry" type="button" hidden>Retry</button>
+        <noscript><p>Enable JavaScript and reload to start the game.</p></noscript>
+      </main>
+      <footer><span>Created by UphyRaop</span><span>© 2026 UR Trade Network. All rights reserved.</span></footer>
+    </div>
+  </div>
+  <script>
+    const config = $GODOT_CONFIG;
+    const loading = document.getElementById('loading');
+    const status = document.getElementById('status');
+    const support = document.getElementById('support');
+    const progress = document.getElementById('progress');
+    const percent = document.getElementById('percent');
+    const retry = document.getElementById('retry');
+    const map = loading.querySelector('.map');
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    let timeout;
+    let lastBytes = 0;
+    let failed = false;
+    let ready = false;
+
+    function syncMotion() {
+      if (reducedMotion.matches) map.pauseAnimations();
+      else map.unpauseAnimations();
+    }
+
+    function showFailure(message) {
+      if (failed || ready) return;
+      failed = true;
+      clearTimeout(timeout);
+      status.textContent = 'The game couldn’t load';
+      support.textContent = message;
+      progress.hidden = true;
+      percent.textContent = '';
+      retry.hidden = false;
+    }
+
+    function watchForStall() {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        showFailure('Startup stopped responding. Check your connection and try again.');
+      }, 120000);
+    }
+
+    function updateProgress(current, total) {
+      if (failed || ready) return;
+      if (current > lastBytes) {
+        lastBytes = current;
+        watchForStall();
+      }
+      const known = total > 0;
+      const value = known ? Math.min(100, Math.max(0, Math.floor(current / total * 100))) : 0;
+      status.textContent = known && current >= total ? 'Preparing game systems' : 'Loading game resources';
+      support.textContent = known && current >= total ? 'Starting the game.' : 'Downloading the game files.';
+      percent.textContent = known ? value + '%' : '';
+      if (known) progress.setAttribute('aria-valuenow', value);
+      else progress.removeAttribute('aria-valuenow');
+      progress.firstElementChild.style.transform = 'scaleX(' + value / 100 + ')';
+    }
+
+    function revealGame() {
+      if (failed) return;
+      ready = true;
+      clearTimeout(timeout);
+      status.textContent = 'Ready to launch';
+      function removeOverlay() {
+        loading.remove();
+        reducedMotion.removeEventListener('change', syncMotion);
+      }
+      if (reducedMotion.matches) {
+        removeOverlay();
+      } else {
+        loading.classList.add('leaving');
+        loading.addEventListener('transitionend', removeOverlay, { once: true });
+        setTimeout(removeOverlay, 350);
+      }
+    }
+
+    retry.addEventListener('click', () => location.reload());
+    syncMotion();
+    reducedMotion.addEventListener('change', syncMotion);
+    watchForStall();
+
+    const engineScript = document.createElement('script');
+    engineScript.src = '$GODOT_URL';
+    engineScript.onerror = () => showFailure('Check your internet connection, then try again.');
+    engineScript.onload = async () => {
+      if (failed) return;
+      try {
+        if (Engine.getMissingFeatures({ threads: $GODOT_THREADS_ENABLED }).length) {
+          showFailure('Use an updated browser with WebAssembly and WebGL 2 enabled.');
+          return;
+        }
+        watchForStall();
+        await new Engine(config).startGame({ onProgress: updateProgress });
+        revealGame();
+      } catch {
+        showFailure('Check your connection and try again. If the problem continues, try an updated browser.');
+      }
+    };
+    // Let the inline SVG start its timeline before requesting the engine.
+    window.addEventListener('load', () => document.head.append(engineScript), { once: true });
+  </script>
+</body>
+</html>
