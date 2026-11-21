@@ -30,6 +30,10 @@ var status_label: Label
 var cash_label: Label
 var active_jobs_label: Label
 var pending_jobs_label: Label
+var geographic_service := IDMGeographicService.new()
+var geographic_map_available := false
+var legacy_map_mode := false
+var map_texture: Texture2D
 var pause_button: Button
 var speed_buttons: Dictionary = {}
 var sheet: PanelContainer
@@ -59,6 +63,8 @@ var safe_insets := Vector4(8, 8, 8, 16)
 var ui_scale := 1.0
 
 func _ready() -> void:
+	geographic_map_available = geographic_service.load_data()
+	_load_map_texture()
 	_load_active_save_path()
 	_load_game()
 	_build_ui()
@@ -85,6 +91,13 @@ func _load_active_save_path() -> void:
 	var candidate := str(parsed.data.get("path", ""))
 	if candidate == LEGACY_SAVE_PATH or (candidate.begins_with("user://delivery_ops_session_") and candidate.ends_with(".json")):
 		save_path = candidate
+
+func _load_map_texture() -> void:
+	if not geographic_map_available:
+		map_texture = null
+		return
+	var texture_path := "res://data/kl_selangor_%s.png" % ThemeService.mode
+	map_texture = load(texture_path) as Texture2D
 
 func _set_active_save_path(path: String) -> void:
 	var marker := FileAccess.open(ACTIVE_SAVE_MARKER, FileAccess.WRITE)
@@ -387,7 +400,7 @@ func _sheet_title() -> String:
 	match selected_tab:
 		"Map":
 			if sheet_expanded:
-				return "PARCELS  ·  FICTIONAL CITY MAP"
+				return "KL + SELANGOR  ·  OPENSTREETMAP" if geographic_map_available and not legacy_map_mode else "PARCELS  ·  FICTIONAL CITY MAP"
 			return "%d PARCELS WAITING  ·  TAP A PIN" % _waiting_count()
 		"Operations": return "OPERATIONS  ·  " + selected_subtab.to_upper()
 		"Finance": return "COMPANY FINANCES"
@@ -490,10 +503,12 @@ func _on_map_input(event: InputEvent) -> void:
 		map_view.queue_redraw()
 
 func _select_marker(point: Vector2) -> void:
+	var map_rect := _map_content_rect(map_view.size)
 	for order in orders:
 		if order["status"] == "Waiting":
-			var destination: Vector2 = order["destination"] * map_view.size * map_zoom + map_pan
-			if point.distance_to(destination) < 30:
+			var destination: Vector2 = map_rect.position + order["destination"] * map_rect.size
+			var screen_destination := destination * map_zoom + map_pan
+			if point.distance_to(screen_destination) < 30:
 				selected_order = order["id"]
 				sheet_expanded = true
 				_refresh()
@@ -527,6 +542,7 @@ func _button(label: String, callback: Callable) -> Button:
 	return button
 
 func _on_theme_changed(_mode: String) -> void:
+	_load_map_texture()
 	_apply_theme_to_ui()
 	if is_instance_valid(map_view):
 		map_view.queue_redraw()
@@ -568,7 +584,7 @@ func _spawn_order() -> void:
 		max_x = 0.52
 		min_y = 0.34
 		max_y = 0.74
-	var destination := Vector2(randf_range(min_x, max_x), randf_range(min_y, max_y))
+	var destination := geographic_service.random_road_location(get_viewport_rect().size) if geographic_map_available and not legacy_map_mode else Vector2(randf_range(min_x, max_x), randf_range(min_y, max_y))
 	for attempt in 10:
 		var overlaps := false
 		for existing in orders:
@@ -577,10 +593,13 @@ func _spawn_order() -> void:
 				break
 		if not overlaps:
 			break
-		destination = Vector2(randf_range(min_x, max_x), randf_range(min_y, max_y))
+		destination = geographic_service.random_road_location(get_viewport_rect().size) if geographic_map_available and not legacy_map_mode else Vector2(randf_range(min_x, max_x), randf_range(min_y, max_y))
 	orders.append({
 		"id": next_order_id,
 		"destination": destination,
+		"destination_latitude": geographic_service.uv_to_geo(destination).y if geographic_map_available and not legacy_map_mode else null,
+		"destination_longitude": geographic_service.uv_to_geo(destination).x if geographic_map_available and not legacy_map_mode else null,
+		"coordinate_reference": "EPSG:4326" if geographic_map_available and not legacy_map_mode else "legacy_normalized",
 		"payout": randi_range(55, 105),
 		"status": "Waiting",
 		"rider": -1,
@@ -605,10 +624,15 @@ func _dispatch(order_id: int) -> void:
 	rider["status"] = "busy"
 	rider["order_id"] = order_id
 	rider["remaining"] = TRAVEL_SECONDS
+	order["origin"] = rider["position"]
+	if geographic_map_available and not legacy_map_mode:
+		var origin_geo := geographic_service.uv_to_geo(rider["position"])
+		order["origin_latitude"] = origin_geo.y
+		order["origin_longitude"] = origin_geo.x
 	order["status"] = "On route"
 	order["rider"] = rider["id"]
 	selected_order = order_id
-	status_label.text = "Rider %02d dispatched" % rider["id"]
+	status_label.text = "Rider %02d dispatched · road routing pending" % rider["id"] if geographic_map_available and not legacy_map_mode else "Rider %02d dispatched" % rider["id"]
 	_save_game()
 	_refresh()
 
@@ -708,13 +732,14 @@ func _refresh() -> void:
 				order_list.add_child(dispatch)
 			elif not selected.is_empty() and selected["status"] == "On route":
 				order_list.add_child(_label("PARCEL %03d  ·  ON ROUTE" % selected["id"], 16, "#f1f6fa"))
-				order_list.add_child(_label("Your rider is travelling to the drop-off.", 13, "#a8bac8"))
+				order_list.add_child(_label("Road routing is still in development; prototype travel continues.", 13, "#a8bac8"))
 			else:
 				var waiting_count := _waiting_count()
 				var hint := _label("%d parcels waiting" % waiting_count if waiting_count > 0 else "Tap a parcel pin to review", 16, "#f1f6fa")
 				order_list.add_child(hint)
 				if sheet_expanded:
-					order_list.add_child(_label("WORLD OVERVIEW  ·  PROTOTYPE" if world_map else "FICTIONAL CITY MAP", 12, "#91a8ba"))
+					var map_caption := "WORLD VIEW DATA UNAVAILABLE" if world_map else "OSM STREET MAP · KL/SELANGOR CORE" if geographic_map_available and not legacy_map_mode else "FICTIONAL CITY MAP · LEGACY SAVE"
+					order_list.add_child(_label(map_caption, 12, "#91a8ba"))
 		"Operations":
 			if selected_subtab == "Fleet":
 				var ready_label := _label("%d READY" % _ready_count(), 20, "#f1f6fa")
@@ -815,38 +840,45 @@ func _draw_map() -> void:
 		return
 	map_view.draw_rect(Rect2(Vector2.ZERO, size), ThemeService.color("map_background"))
 	map_view.draw_set_transform(map_pan, 0.0, Vector2(map_zoom, map_zoom))
-	# Stylized, explicitly fictional neighborhood blocks and named districts.
-	var columns := 7
-	var rows := 9
-	var cell_w := size.x / float(columns)
-	var cell_h := size.y / float(rows)
-	for row in rows:
-		for column in columns:
-			var cell := Rect2(Vector2(column * cell_w + 9, row * cell_h + 10), Vector2(cell_w - 18, cell_h - 20))
-			var block_color := ThemeService.color("map_block") if (row + column) % 3 != 0 else ThemeService.color("map_block_alt")
-			if (row == 2 and column == 1) or (row == 6 and column == 5):
-				block_color = ThemeService.color("map_park")
-			map_view.draw_rect(cell, block_color)
-			map_view.draw_rect(cell, ThemeService.color("panel_border"), false, 1.0)
-	# Broad avenues use a dark casing and a lighter center to read as roads at a glance.
-	for column in range(columns + 1):
-		var x := column * cell_w
-		map_view.draw_line(Vector2(x, 0), Vector2(x, size.y), ThemeService.color("map_road_outline"), 13.0, true)
-		map_view.draw_line(Vector2(x, 0), Vector2(x, size.y), ThemeService.color("map_road"), 6.0, true)
-	for row in range(rows + 1):
-		var y := row * cell_h
-		map_view.draw_line(Vector2(0, y), Vector2(size.x, y), ThemeService.color("map_road_outline"), 13.0, true)
-		map_view.draw_line(Vector2(0, y), Vector2(size.x, y), ThemeService.color("map_road"), 6.0, true)
-	# One diagonal connector anchors the prototype city without implying real geography.
-	map_view.draw_line(Vector2(size.x * 0.12, size.y * 0.78), Vector2(size.x * 0.88, size.y * 0.2), ThemeService.color("map_road_outline"), 23.0, true)
-	map_view.draw_line(Vector2(size.x * 0.12, size.y * 0.78), Vector2(size.x * 0.88, size.y * 0.2), ThemeService.color("map_road"), 13.0, true)
-	map_view.draw_string(ThemeDB.fallback_font, Vector2(18, 157), "FICTIONAL CITY  ·  PROTOTYPE", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ThemeService.color("map_label"))
-	map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.12, size.y * 0.3), "NORTH DEPOT", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, ThemeService.color("map_label"))
-	map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.57, size.y * 0.67), "MARKET DISTRICT", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, ThemeService.color("map_label"))
+	var map_rect := _map_content_rect(size)
+	if geographic_map_available and not legacy_map_mode and is_instance_valid(map_texture):
+		map_view.draw_texture_rect(map_texture, map_rect, false)
+		var major_places := ["Kuala Lumpur", "Petaling Jaya", "Shah Alam", "Subang Jaya", "Klang", "Kajang", "Ampang Jaya", "Puchong"]
+		var drawn_label_rects: Array[Rect2] = []
+		for place in geographic_service.places:
+			var place_name := str(place.get("name", ""))
+			var place_type := str(place.get("type", ""))
+			if map_zoom < 1.25 and place_name not in major_places:
+				continue
+			if map_zoom >= 1.25 and place_type not in ["city", "town", "suburb", "quarter", "neighbourhood"]:
+				continue
+			var place_point: Vector2 = map_rect.position + place["uv"] * map_rect.size
+			var screen_point := place_point * map_zoom + map_pan
+			var label_width := ThemeDB.fallback_font.get_string_size(place_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
+			var screen_bounds := Rect2(screen_point + Vector2(3, -18), Vector2(label_width + 8, 20))
+			var label_bounds := Rect2(place_point + Vector2(3, -18), Vector2(label_width + 8, 20))
+			var panel_obstruction := (size.x > size.y and screen_point.x > size.x - 390.0) or (size.x <= size.y and screen_point.y > size.y - 240.0)
+			if panel_obstruction or screen_point.x < 8 or screen_point.x + label_width > size.x - 8 or screen_point.y < 185 or screen_point.y > size.y - 40:
+				continue
+			var overlaps_label := false
+			for existing_bounds in drawn_label_rects:
+				if existing_bounds.intersects(screen_bounds.grow(8)):
+					overlaps_label = true
+					break
+			if overlaps_label:
+				continue
+			drawn_label_rects.append(screen_bounds)
+			map_view.draw_rect(label_bounds, Color(0.02, 0.07, 0.10, 0.76))
+			map_view.draw_string(ThemeDB.fallback_font, place_point + Vector2(7, -4), place_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, ThemeService.color("text"))
+		map_view.draw_string(ThemeDB.fallback_font, Vector2(18, 155), "© OpenStreetMap contributors · KL/Selangor", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, ThemeService.color("map_label"))
+		if world_map:
+			map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.5 - 105, size.y * 0.24), "World map coverage is not available in this build.", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ThemeService.color("text"))
+	else:
+		_draw_fictional_map_background(size)
 	for order in orders:
 		if order["status"] == "Delivered":
 			continue
-		var point: Vector2 = order["destination"] * size
+		var point: Vector2 = map_rect.position + order["destination"] * map_rect.size
 		map_view.draw_circle(point, 21, ThemeService.color("rider_back"))
 		map_view.draw_circle(point, 16, ThemeService.color("accent_fill"))
 		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), "P", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#06202a"))
@@ -857,14 +889,52 @@ func _draw_map() -> void:
 			if not order.is_empty():
 				var target: Vector2 = order["destination"]
 				var progress := clampf(1.0 - rider["remaining"] / TRAVEL_SECONDS, 0.0, 1.0)
-				map_view.draw_line(Vector2(0.5, 0.5) * size, target * size, Color(0.25, 0.82, 0.9, 0.55), 3.0, true)
-				position = Vector2(0.5, 0.5).lerp(target, progress)
+				var origin: Vector2 = order.get("origin", rider["position"])
+				position = origin.lerp(target, progress)
 				rider["position"] = position
-		var point := position * size
+				if geographic_map_available and not legacy_map_mode:
+					var current_geo := geographic_service.uv_to_geo(position)
+					rider["latitude"] = current_geo.y
+					rider["longitude"] = current_geo.x
+		var point := map_rect.position + position * map_rect.size
 		map_view.draw_circle(point, 17, ThemeService.color("rider_back"))
 		map_view.draw_circle(point, 12, ThemeService.color("rider"))
 		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), "R", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#06202a"))
 	map_view.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func _map_content_rect(size: Vector2) -> Rect2:
+	if not geographic_map_available or legacy_map_mode:
+		return Rect2(Vector2.ZERO, size)
+	var fit := maxf(size.x / IDMGeographicService.TEXTURE_SIZE.x, size.y / IDMGeographicService.TEXTURE_SIZE.y)
+	var fitted := IDMGeographicService.TEXTURE_SIZE * fit
+	return Rect2((size - fitted) * 0.5, fitted)
+
+func _draw_fictional_map_background(size: Vector2) -> void:
+	var columns := 7
+	var rows := 9
+	var cell_w := size.x / float(columns)
+	var cell_h := size.y / float(rows)
+	for row in rows:
+		for column in columns:
+			var cell := Rect2(Vector2(column * cell_w + 9, row * cell_h + 10), Vector2(cell_w - 18, cell_h - 20))
+			var block := ThemeService.color("map_block") if (row + column) % 3 != 0 else ThemeService.color("map_block_alt")
+			if (row == 2 and column == 1) or (row == 6 and column == 5):
+				block = ThemeService.color("map_park")
+			map_view.draw_rect(cell, block)
+			map_view.draw_rect(cell, ThemeService.color("panel_border"), false, 1.0)
+	for column in columns + 1:
+		var x := column * cell_w
+		map_view.draw_line(Vector2(x, 0), Vector2(x, size.y), ThemeService.color("map_road_outline"), 13.0, true)
+		map_view.draw_line(Vector2(x, 0), Vector2(x, size.y), ThemeService.color("map_road"), 6.0, true)
+	for row in rows + 1:
+		var y := row * cell_h
+		map_view.draw_line(Vector2(0, y), Vector2(size.x, y), ThemeService.color("map_road_outline"), 13.0, true)
+		map_view.draw_line(Vector2(0, y), Vector2(size.x, y), ThemeService.color("map_road"), 6.0, true)
+	map_view.draw_line(Vector2(size.x * 0.12, size.y * 0.78), Vector2(size.x * 0.88, size.y * 0.2), ThemeService.color("map_road_outline"), 23.0, true)
+	map_view.draw_line(Vector2(size.x * 0.12, size.y * 0.78), Vector2(size.x * 0.88, size.y * 0.2), ThemeService.color("map_road"), 13.0, true)
+	map_view.draw_string(ThemeDB.fallback_font, Vector2(18, 157), "FICTIONAL CITY  ·  EXISTING SAVE", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ThemeService.color("map_label"))
+	map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.12, size.y * 0.3), "NORTH DEPOT", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, ThemeService.color("map_label"))
+	map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.57, size.y * 0.67), "MARKET DISTRICT", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, ThemeService.color("map_label"))
 
 func _save_game() -> void:
 	if save_recovery_required:
@@ -874,6 +944,8 @@ func _save_game() -> void:
 		return
 	var data := {
 		"version": 1,
+		"map_space": "kl_selangor_web_mercator_uv" if geographic_map_available and not legacy_map_mode else "legacy_normalized",
+		"map_bounds_wsen": [IDMGeographicService.WEST, IDMGeographicService.SOUTH, IDMGeographicService.EAST, IDMGeographicService.NORTH] if geographic_map_available and not legacy_map_mode else [],
 		"cash": cash,
 		"revenue_total": revenue_total,
 		"cost_total": cost_total,
@@ -903,6 +975,9 @@ func _load_game() -> void:
 	if int(data.get("version", 0)) != 1:
 		save_recovery_required = true
 		return
+	# Existing normalized saves belong to the old fictional prototype map. Keep
+	# them in that coordinate space until a deliberate, visible migration exists.
+	legacy_map_mode = str(data.get("map_space", "legacy_normalized")) != "kl_selangor_web_mercator_uv"
 	cash = float(data.get("cash", STARTING_CASH))
 	revenue_total = float(data.get("revenue_total", 0))
 	cost_total = float(data.get("cost_total", 0))
@@ -943,6 +1018,7 @@ func _as_vector2(value: Variant, fallback: Vector2) -> Vector2:
 
 func _new_game() -> void:
 	save_recovery_required = false
+	legacy_map_mode = false
 	cash = STARTING_CASH
 	revenue_total = 0.0
 	cost_total = 0.0
@@ -950,7 +1026,14 @@ func _new_game() -> void:
 	orders.clear()
 	riders.clear()
 	for index in STARTING_RIDERS:
-		riders.append({"id": next_rider_id, "status": "ready", "order_id": -1, "remaining": 0.0, "position": Vector2(0.5, 0.5)})
+		var start_position := geographic_service.random_road_location(get_viewport_rect().size) if geographic_map_available else Vector2(0.5, 0.5)
+		var rider := {"id": next_rider_id, "status": "ready", "order_id": -1, "remaining": 0.0, "position": start_position}
+		if geographic_map_available:
+			var point_geo := geographic_service.uv_to_geo(start_position)
+			rider["latitude"] = point_geo.y
+			rider["longitude"] = point_geo.x
+			rider["coordinate_reference"] = "EPSG:4326"
+		riders.append(rider)
 		next_rider_id += 1
 	_save_game()
 

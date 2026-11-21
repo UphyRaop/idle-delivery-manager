@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "source": "OpenStreetMap contributors via Geofabrik Malaysia-Singapore-Brunei extract",
+  "extract_date": "2026-11-21",
+  "license": "Open Database License (ODbL) 1.0",
+  "bbox_wsen": [
+    101.55,
+    2.98,
+    101.83,
+    3.3
+  ],
+  "texture_px": [
+    1152,
+    1320
+  ],
+  "road_segments": 159476,
+  "place_labels": 456,
+  "spawn_points": 5000
+}
