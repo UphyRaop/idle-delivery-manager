@@ -28,6 +28,8 @@ var rider_summary: Label
 var finance_summary: Label
 var status_label: Label
 var cash_label: Label
+var active_jobs_label: Label
+var pending_jobs_label: Label
 var pause_button: Button
 var speed_buttons: Dictionary = {}
 var sheet: PanelContainer
@@ -117,7 +119,7 @@ func _build_ui() -> void:
 	hud.add_theme_stylebox_override("panel", _panel_style("#101e2b", 18))
 	add_child(hud)
 	var top_row := HBoxContainer.new()
-	top_row.add_theme_constant_override("separation", 10)
+	top_row.add_theme_constant_override("separation", 6)
 	hud.add_child(top_row)
 	var brand := Label.new()
 	brand.text = "IDM"
@@ -125,12 +127,25 @@ func _build_ui() -> void:
 	brand.add_theme_color_override("font_color", Color("#45d9ec"))
 	brand.add_theme_font_size_override("font_size", 19)
 	top_row.add_child(brand)
+	var activity := VBoxContainer.new()
+	activity.add_theme_constant_override("separation", 1)
+	activity.custom_minimum_size.x = 70
+	top_row.add_child(activity)
+	active_jobs_label = Label.new()
+	active_jobs_label.add_theme_font_size_override("font_size", 10)
+	active_jobs_label.add_theme_color_override("font_color", ThemeService.color("text"))
+	activity.add_child(active_jobs_label)
+	pending_jobs_label = Label.new()
+	pending_jobs_label.add_theme_font_size_override("font_size", 10)
+	pending_jobs_label.add_theme_color_override("font_color", ThemeService.color("muted"))
+	activity.add_child(pending_jobs_label)
 	var balance := VBoxContainer.new()
+	balance.custom_minimum_size.x = 70
 	balance.add_theme_constant_override("separation", 0)
 	top_row.add_child(balance)
 	cash_label = Label.new()
 	cash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	cash_label.add_theme_font_size_override("font_size", 18)
+	cash_label.add_theme_font_size_override("font_size", 16)
 	cash_label.add_theme_color_override("font_color", Color("#f3f7fb"))
 	balance.add_child(cash_label)
 	var balance_caption := Label.new()
@@ -650,7 +665,9 @@ func _find_order(order_id: int) -> Dictionary:
 func _refresh() -> void:
 	if not is_instance_valid(order_list):
 		return
-	cash_label.text = "RM %0.0f" % cash
+	cash_label.text = "RM%0.0f" % cash
+	active_jobs_label.text = "ACTIVE  %d" % _busy_count()
+	pending_jobs_label.text = "ORDERS  %d" % _waiting_count()
 	if selected_tab == "Map" and status_label.text == "" and _find_order(selected_order).is_empty():
 		status_label.text = "Tap a parcel pin to see payout and dispatch."
 	for child in order_list.get_children():
@@ -678,7 +695,7 @@ func _refresh() -> void:
 			if not selected.is_empty() and selected["status"] == "Waiting":
 				var detail := _label("PARCEL %03d" % selected["id"], 13, "#91a8ba")
 				order_list.add_child(detail)
-				var payout := _label("RM %d delivery payout" % selected["payout"], 20, "#f1f6fa")
+				var payout := _label("RM%d delivery payout" % selected["payout"], 20, "#f1f6fa")
 				payout.add_theme_font_size_override("font_size", int(round(20.0 * ui_scale)))
 				order_list.add_child(payout)
 				var dispatch := _button("Dispatch rider", func(): _dispatch(selected["id"]))
@@ -703,7 +720,7 @@ func _refresh() -> void:
 				var ready_label := _label("%d READY" % _ready_count(), 20, "#f1f6fa")
 				order_list.add_child(ready_label)
 				order_list.add_child(_label("%d on route   ·   %d total partners" % [_busy_count(), riders.size()], 13, "#a8bac8"))
-				var hire := _button("+   Recruit partner  ·  RM 120", _hire_rider)
+				var hire := _button("+   Recruit partner  ·  RM120", _hire_rider)
 				hire.custom_minimum_size.y = 50
 				hire.disabled = cash < 120
 				order_list.add_child(hire)
@@ -717,12 +734,12 @@ func _refresh() -> void:
 			var metrics_row := HBoxContainer.new()
 			metrics_row.add_theme_constant_override("separation", 8)
 			order_list.add_child(metrics_row)
-			metrics_row.add_child(_metric_card("BALANCE", "RM %0.0f" % cash))
-			metrics_row.add_child(_metric_card("REVENUE", "RM %0.0f" % revenue_total))
+			metrics_row.add_child(_metric_card("BALANCE", "RM%0.0f" % cash))
+			metrics_row.add_child(_metric_card("REVENUE", "RM%0.0f" % revenue_total))
 			var totals_row := HBoxContainer.new()
 			totals_row.add_theme_constant_override("separation", 8)
 			order_list.add_child(totals_row)
-			totals_row.add_child(_metric_card("OPERATING COST", "RM %0.0f" % cost_total))
+			totals_row.add_child(_metric_card("OPERATING COST", "RM%0.0f" % cost_total))
 			totals_row.add_child(_metric_card("DELIVERIES", str(delivered)))
 		"Settings":
 			if selected_subtab == "Preferences":
