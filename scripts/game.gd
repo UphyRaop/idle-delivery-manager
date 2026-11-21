@@ -732,7 +732,10 @@ func _refresh() -> void:
 				order_list.add_child(dispatch)
 			elif not selected.is_empty() and selected["status"] == "On route":
 				order_list.add_child(_label("PARCEL %03d  ·  ON ROUTE" % selected["id"], 16, "#f1f6fa"))
-				order_list.add_child(_label("Road routing is still in development; prototype travel continues.", 13, "#a8bac8"))
+				var route_notice := _label("Road routing is still in development; prototype travel continues.", 13, "#a8bac8")
+				route_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				route_notice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				order_list.add_child(route_notice)
 			else:
 				var waiting_count := _waiting_count()
 				var hint := _label("%d parcels waiting" % waiting_count if waiting_count > 0 else "Tap a parcel pin to review", 16, "#f1f6fa")
