@@ -36,6 +36,12 @@ jobs:
           mv "$tools_dir/$engine" "$tools_dir/godot"
           echo "$tools_dir" >> "$GITHUB_PATH"
 
+      - name: Import the Godot project
+        run: godot --headless --editor --path . --quit
+
+      - name: Run architecture and migration regression tests
+        run: godot --headless --path . --script tests/run_tests.gd
+
       - name: Export and verify the Web game
         run: ./scripts/export-web.sh
 

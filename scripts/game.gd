@@ -1,6 +1,10 @@
 extends Control
 
-const SAVE_PATH := "user://delivery_ops_save.json"
+const LEGACY_SAVE_PATH := "user://delivery_ops_save.json"
+const ACTIVE_SAVE_MARKER := "user://idm_active_save.json"
+var save_path := LEGACY_SAVE_PATH
+var save_recovery_required := false
+var recovery_overlay: ColorRect
 const STARTING_CASH := 500.0
 const STARTING_RIDERS := 3
 const ORDER_INTERVAL := 8.0
@@ -53,17 +57,40 @@ var safe_insets := Vector4(8, 8, 8, 16)
 var ui_scale := 1.0
 
 func _ready() -> void:
+	_load_active_save_path()
 	_load_game()
 	_build_ui()
+	ThemeService.theme_changed.connect(_on_theme_changed)
 	get_viewport().size_changed.connect(_layout_ui)
 	_layout_ui()
 	_refresh()
-	if orders.is_empty():
+	if save_recovery_required:
+		_show_save_recovery()
+	elif orders.is_empty():
 		_spawn_order()
 		_spawn_order()
+		_save_game()
+
+func _load_active_save_path() -> void:
+	if not FileAccess.file_exists(ACTIVE_SAVE_MARKER):
+		return
+	var marker := FileAccess.open(ACTIVE_SAVE_MARKER, FileAccess.READ)
+	if marker == null:
+		return
+	var parsed := JSON.new()
+	if parsed.parse(marker.get_as_text()) != OK or typeof(parsed.data) != TYPE_DICTIONARY:
+		return
+	var candidate := str(parsed.data.get("path", ""))
+	if candidate == LEGACY_SAVE_PATH or (candidate.begins_with("user://delivery_ops_session_") and candidate.ends_with(".json")):
+		save_path = candidate
+
+func _set_active_save_path(path: String) -> void:
+	var marker := FileAccess.open(ACTIVE_SAVE_MARKER, FileAccess.WRITE)
+	if marker != null:
+		marker.store_string(JSON.stringify({"path": path}))
 
 func _process(delta: float) -> void:
-	if paused:
+	if paused or save_recovery_required:
 		return
 	elapsed += delta * speed
 	if elapsed >= ORDER_INTERVAL:
@@ -123,7 +150,7 @@ func _build_ui() -> void:
 	pause_button = _button("Pause", _toggle_pause)
 	pause_button.custom_minimum_size = Vector2(70, 46)
 	sim_row.add_child(pause_button)
-	for multiplier in [1, 2, 4]:
+	for multiplier in [1, 2, 5, 10]:
 		var factor: int = multiplier
 		var speed_button := _button(str(factor) + "×", func(): _set_speed(factor))
 		speed_button.custom_minimum_size = Vector2(46, 46)
@@ -194,8 +221,8 @@ func _build_ui() -> void:
 	var nav_row := HBoxContainer.new()
 	nav_row.add_theme_constant_override("separation", 5)
 	bottom_nav.add_child(nav_row)
-	for name in ["Map", "Fleet", "Finance", "Company"]:
-		var internal_tab: String = "Co." if name == "Company" else name
+	for name in ["Map", "Operations", "Finance", "Settings"]:
+		var internal_tab: String = name
 		var button := _button(name, func(): _set_tab(internal_tab))
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.custom_minimum_size = Vector2(0, 56)
@@ -205,7 +232,7 @@ func _build_ui() -> void:
 
 func _panel_style(color: String, radius: int) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(color)
+	style.bg_color = ThemeService.color("panel")
 	style.set_corner_radius_all(radius)
 	style.content_margin_left = 12
 	style.content_margin_right = 12
@@ -215,14 +242,14 @@ func _panel_style(color: String, radius: int) -> StyleBoxFlat:
 	style.border_width_top = 1
 	style.border_width_right = 1
 	style.border_width_bottom = 1
-	style.border_color = Color("#1b3546")
+	style.border_color = ThemeService.color("panel_border")
 	return style
 
 func _label(text: String, size: int, color: String) -> Label:
 	var label := Label.new()
 	label.text = text
 	label.add_theme_font_size_override("font_size", int(round(float(size) * ui_scale)))
-	label.add_theme_color_override("font_color", Color(color))
+	label.add_theme_color_override("font_color", ThemeService.resolve_existing_text(Color(color)))
 	return label
 
 func _layout_ui() -> void:
@@ -259,8 +286,8 @@ func _layout_ui() -> void:
 	sim_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	sim_controls.offset_left = safe_left + 12
 	sim_controls.offset_top = safe_top + 72
-	sim_controls.offset_right = safe_left + 252
-	sim_controls.offset_bottom = safe_top + 124
+	sim_controls.offset_right = safe_left + 306
+	sim_controls.offset_bottom = safe_top + 134
 
 	var controls_on_left := is_landscape and sheet_expanded
 	map_controls.columns = 1
@@ -347,9 +374,9 @@ func _sheet_title() -> String:
 			if sheet_expanded:
 				return "PARCELS  ·  FICTIONAL CITY MAP"
 			return "%d PARCELS WAITING  ·  TAP A PIN" % _waiting_count()
-		"Fleet": return "YOUR FLEET"
+		"Operations": return "OPERATIONS  ·  " + selected_subtab.to_upper()
 		"Finance": return "COMPANY FINANCES"
-		_: return "COMPANY"
+		_: return "SETTINGS  ·  " + selected_subtab.to_upper()
 
 func _zoom_map(factor: float) -> void:
 	var center := map_view.size * 0.5
@@ -397,7 +424,7 @@ func _set_tab(name: String) -> void:
 	if name == "Map":
 		selected_subtab = "World" if world_map else "City"
 	else:
-		selected_subtab = {"Fleet":"Riders", "Finance":"Overview", "Co.":"Operations"}.get(name, "City")
+		selected_subtab = {"Operations":"Fleet", "Finance":"Overview", "Settings":"Game"}.get(name, "City")
 	status_label.text = ""
 	_refresh()
 
@@ -463,9 +490,9 @@ func _button(label: String, callback: Callable) -> Button:
 	button.custom_minimum_size.y = 46
 	button.pressed.connect(callback)
 	button.add_theme_font_size_override("font_size", int(round(15.0 * ui_scale)))
-	button.add_theme_color_override("font_color", Color("#eaf2f8"))
+	button.add_theme_color_override("font_color", ThemeService.color("button_text"))
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color("#183246")
+	normal.bg_color = ThemeService.color("button")
 	normal.set_corner_radius_all(14)
 	normal.content_margin_left = 10
 	normal.content_margin_right = 10
@@ -473,16 +500,41 @@ func _button(label: String, callback: Callable) -> Button:
 	normal.content_margin_bottom = 5
 	button.add_theme_stylebox_override("normal", normal)
 	var hover := normal.duplicate()
-	hover.bg_color = Color("#244b60")
+	hover.bg_color = ThemeService.color("button_hover")
 	button.add_theme_stylebox_override("hover", hover)
 	var pressed := normal.duplicate()
-	pressed.bg_color = Color("#087f98")
+	pressed.bg_color = ThemeService.color("accent_fill")
 	button.add_theme_stylebox_override("pressed", pressed)
 	var disabled := normal.duplicate()
-	disabled.bg_color = Color("#172a36")
+	disabled.bg_color = ThemeService.color("panel_border")
 	button.add_theme_stylebox_override("disabled", disabled)
-	button.add_theme_color_override("font_disabled_color", Color("#667988"))
+	button.add_theme_color_override("font_disabled_color", ThemeService.color("muted"))
 	return button
+
+func _on_theme_changed(_mode: String) -> void:
+	_apply_theme_to_ui()
+	if is_instance_valid(map_view):
+		map_view.queue_redraw()
+
+func _apply_theme_to_ui() -> void:
+	for node in find_children("*", "PanelContainer", true, false):
+		var style: StyleBoxFlat = node.get_theme_stylebox("panel").duplicate() as StyleBoxFlat
+		style.bg_color = ThemeService.color("panel")
+		style.border_color = ThemeService.color("panel_border")
+		node.add_theme_stylebox_override("panel", style)
+	for node in find_children("*", "Button", true, false):
+		var button: Button = node
+		var is_action := button.text.contains("Dispatch")
+		var normal: StyleBoxFlat = button.get_theme_stylebox("normal").duplicate() as StyleBoxFlat
+		normal.bg_color = ThemeService.color("accent_fill") if is_action else ThemeService.color("button")
+		button.add_theme_stylebox_override("normal", normal)
+		var hover: StyleBoxFlat = button.get_theme_stylebox("hover").duplicate() as StyleBoxFlat
+		hover.bg_color = ThemeService.color("accent_fill") if is_action else ThemeService.color("button_hover")
+		button.add_theme_stylebox_override("hover", hover)
+		button.add_theme_color_override("font_color", ThemeService.color("button_text") if not is_action else Color("#04252d"))
+	for node in find_children("*", "Label", true, false):
+		var label: Label = node
+		label.add_theme_color_override("font_color", ThemeService.resolve_existing_text(label.get_theme_color("font_color")))
 
 func _spawn_order() -> void:
 	if orders.size() >= 5:
@@ -560,7 +612,7 @@ func _finish_delivery(rider: Dictionary) -> void:
 	order["delivered_at"] = Time.get_unix_time_from_system()
 	rider["status"] = "ready"
 	rider["order_id"] = -1
-	status_label.text = "Delivered  +$%d  ·  cost $%d" % [payout, operating_cost]
+	status_label.text = "Delivered  +RM%d  ·  cost RM%d" % [payout, operating_cost]
 	# Return control to the map after a completed stop; keep the outcome visible in the compact sheet.
 	sheet_expanded = false
 	_save_game()
@@ -568,7 +620,7 @@ func _finish_delivery(rider: Dictionary) -> void:
 
 func _hire_rider() -> void:
 	if cash < 120:
-		status_label.text = "Need $120 to hire"
+		status_label.text = "Need RM120 to recruit partner"
 		return
 	cash -= 120
 	riders.append({"id": next_rider_id, "status": "ready", "order_id": -1, "remaining": 0.0, "position": Vector2(0.5, 0.5)})
@@ -598,7 +650,7 @@ func _find_order(order_id: int) -> Dictionary:
 func _refresh() -> void:
 	if not is_instance_valid(order_list):
 		return
-	cash_label.text = "$%0.0f" % cash
+	cash_label.text = "RM %0.0f" % cash
 	if selected_tab == "Map" and status_label.text == "" and _find_order(selected_order).is_empty():
 		status_label.text = "Tap a parcel pin to see payout and dispatch."
 	for child in order_list.get_children():
@@ -610,9 +662,9 @@ func _refresh() -> void:
 		var options: Array[String] = []
 		match selected_tab:
 			"Map": options = ["City", "World"]
-			"Fleet": options = ["Riders", "Management"]
-			"Finance": options = ["Overview", "Reports"]
-			_: options = ["Operations", "Expansion"]
+			"Operations": options = ["Fleet", "Company"]
+			"Finance": options = ["Overview", "Statements"]
+			_: options = ["Game", "Preferences"]
 		for option in options:
 			var subtab := _button(option, func(): _set_subtab(option))
 			subtab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -626,7 +678,7 @@ func _refresh() -> void:
 			if not selected.is_empty() and selected["status"] == "Waiting":
 				var detail := _label("PARCEL %03d" % selected["id"], 13, "#91a8ba")
 				order_list.add_child(detail)
-				var payout := _label("$%d delivery payout" % selected["payout"], 20, "#f1f6fa")
+				var payout := _label("RM %d delivery payout" % selected["payout"], 20, "#f1f6fa")
 				payout.add_theme_font_size_override("font_size", int(round(20.0 * ui_scale)))
 				order_list.add_child(payout)
 				var dispatch := _button("Dispatch rider", func(): _dispatch(selected["id"]))
@@ -646,29 +698,43 @@ func _refresh() -> void:
 				order_list.add_child(hint)
 				if sheet_expanded:
 					order_list.add_child(_label("WORLD OVERVIEW  ·  PROTOTYPE" if world_map else "FICTIONAL CITY MAP", 12, "#91a8ba"))
-		"Fleet":
-			var ready_label := _label("%d READY" % _ready_count(), 20, "#f1f6fa")
-			order_list.add_child(ready_label)
-			order_list.add_child(_label("%d on route   ·   %d total riders" % [_busy_count(), riders.size()], 13, "#a8bac8"))
-			var hire := _button("+   Hire rider  ·  $120", _hire_rider)
-			hire.custom_minimum_size.y = 50
-			hire.disabled = cash < 120
-			order_list.add_child(hire)
+		"Operations":
+			if selected_subtab == "Fleet":
+				var ready_label := _label("%d READY" % _ready_count(), 20, "#f1f6fa")
+				order_list.add_child(ready_label)
+				order_list.add_child(_label("%d on route   ·   %d total partners" % [_busy_count(), riders.size()], 13, "#a8bac8"))
+				var hire := _button("+   Recruit partner  ·  RM 120", _hire_rider)
+				hire.custom_minimum_size.y = 50
+				hire.disabled = cash < 120
+				order_list.add_child(hire)
+			else:
+				order_list.add_child(_label("OPERATIONS  ·  PHASE 1", 13, "#91a8ba"))
+				order_list.add_child(_label("%d active partners" % riders.size(), 20, "#f1f6fa"))
+				order_list.add_child(_label("%d deliveries completed" % delivered, 14, "#a8bac8"))
 		"Finance":
+			if selected_subtab == "Statements":
+				order_list.add_child(_label("Legacy prototype totals; ledger migration is not complete.", 12, "#91a8ba"))
 			var metrics_row := HBoxContainer.new()
 			metrics_row.add_theme_constant_override("separation", 8)
 			order_list.add_child(metrics_row)
-			metrics_row.add_child(_metric_card("BALANCE", "$%0.0f" % cash))
-			metrics_row.add_child(_metric_card("REVENUE", "$%0.0f" % revenue_total))
+			metrics_row.add_child(_metric_card("BALANCE", "RM %0.0f" % cash))
+			metrics_row.add_child(_metric_card("REVENUE", "RM %0.0f" % revenue_total))
 			var totals_row := HBoxContainer.new()
 			totals_row.add_theme_constant_override("separation", 8)
 			order_list.add_child(totals_row)
-			totals_row.add_child(_metric_card("OPERATING COST", "$%0.0f" % cost_total))
+			totals_row.add_child(_metric_card("OPERATING COST", "RM %0.0f" % cost_total))
 			totals_row.add_child(_metric_card("DELIVERIES", str(delivered)))
-		"Co.", "Company":
-			order_list.add_child(_label("OPERATIONS  ·  PHASE 1", 13, "#91a8ba"))
-			order_list.add_child(_label("%d riders" % riders.size(), 20, "#f1f6fa"))
-			order_list.add_child(_label("%d deliveries completed" % delivered, 14, "#a8bac8"))
+		"Settings":
+			if selected_subtab == "Preferences":
+				order_list.add_child(_label("Appearance", 16, "#f1f6fa"))
+				order_list.add_child(_label("Choose a readable map and panel theme.", 13, "#a8bac8"))
+				var theme_button := _button("Switch to light theme" if ThemeService.mode == "dark" else "Switch to dark theme", _toggle_theme)
+				theme_button.custom_minimum_size.y = 50
+				order_list.add_child(theme_button)
+			else:
+				order_list.add_child(_label("Game controls", 16, "#f1f6fa"))
+				order_list.add_child(_label("Pause and simulation speed are available on the map.", 13, "#a8bac8"))
+				order_list.add_child(_label("The current prototype keeps its existing save format.", 12, "#91a8ba"))
 	rider_summary = null
 	finance_summary = null
 	if is_instance_valid(sheet_header_label):
@@ -695,6 +761,10 @@ func _metric_card(title: String, value: String) -> Control:
 	amount.add_theme_font_size_override("font_size", int(round(18.0 * ui_scale)))
 	stack.add_child(amount)
 	return card
+
+func _toggle_theme() -> void:
+	ThemeService.toggle()
+	_refresh()
 
 func _ready_count() -> int:
 	var count := 0
@@ -726,7 +796,7 @@ func _draw_map() -> void:
 	var size := rect.size
 	if size.x <= 0 or size.y <= 0:
 		return
-	map_view.draw_rect(Rect2(Vector2.ZERO, size), Color("#091722"))
+	map_view.draw_rect(Rect2(Vector2.ZERO, size), ThemeService.color("map_background"))
 	map_view.draw_set_transform(map_pan, 0.0, Vector2(map_zoom, map_zoom))
 	# Stylized, explicitly fictional neighborhood blocks and named districts.
 	var columns := 7
@@ -736,32 +806,32 @@ func _draw_map() -> void:
 	for row in rows:
 		for column in columns:
 			var cell := Rect2(Vector2(column * cell_w + 9, row * cell_h + 10), Vector2(cell_w - 18, cell_h - 20))
-			var block_color := Color("#102632") if (row + column) % 3 != 0 else Color("#112b35")
+			var block_color := ThemeService.color("map_block") if (row + column) % 3 != 0 else ThemeService.color("map_block_alt")
 			if (row == 2 and column == 1) or (row == 6 and column == 5):
-				block_color = Color("#15362f")
+				block_color = ThemeService.color("map_park")
 			map_view.draw_rect(cell, block_color)
-			map_view.draw_rect(cell, Color("#193746"), false, 1.0)
+			map_view.draw_rect(cell, ThemeService.color("panel_border"), false, 1.0)
 	# Broad avenues use a dark casing and a lighter center to read as roads at a glance.
 	for column in range(columns + 1):
 		var x := column * cell_w
-		map_view.draw_line(Vector2(x, 0), Vector2(x, size.y), Color("#07131c"), 13.0, true)
-		map_view.draw_line(Vector2(x, 0), Vector2(x, size.y), Color("#284354"), 6.0, true)
+		map_view.draw_line(Vector2(x, 0), Vector2(x, size.y), ThemeService.color("map_road_outline"), 13.0, true)
+		map_view.draw_line(Vector2(x, 0), Vector2(x, size.y), ThemeService.color("map_road"), 6.0, true)
 	for row in range(rows + 1):
 		var y := row * cell_h
-		map_view.draw_line(Vector2(0, y), Vector2(size.x, y), Color("#07131c"), 13.0, true)
-		map_view.draw_line(Vector2(0, y), Vector2(size.x, y), Color("#284354"), 6.0, true)
+		map_view.draw_line(Vector2(0, y), Vector2(size.x, y), ThemeService.color("map_road_outline"), 13.0, true)
+		map_view.draw_line(Vector2(0, y), Vector2(size.x, y), ThemeService.color("map_road"), 6.0, true)
 	# One diagonal connector anchors the prototype city without implying real geography.
-	map_view.draw_line(Vector2(size.x * 0.12, size.y * 0.78), Vector2(size.x * 0.88, size.y * 0.2), Color("#07131c"), 23.0, true)
-	map_view.draw_line(Vector2(size.x * 0.12, size.y * 0.78), Vector2(size.x * 0.88, size.y * 0.2), Color("#355365"), 13.0, true)
-	map_view.draw_string(ThemeDB.fallback_font, Vector2(18, 157), "FICTIONAL CITY  ·  PROTOTYPE", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#7894a5"))
-	map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.12, size.y * 0.3), "NORTH DEPOT", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#7792a1"))
-	map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.57, size.y * 0.67), "MARKET DISTRICT", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#7792a1"))
+	map_view.draw_line(Vector2(size.x * 0.12, size.y * 0.78), Vector2(size.x * 0.88, size.y * 0.2), ThemeService.color("map_road_outline"), 23.0, true)
+	map_view.draw_line(Vector2(size.x * 0.12, size.y * 0.78), Vector2(size.x * 0.88, size.y * 0.2), ThemeService.color("map_road"), 13.0, true)
+	map_view.draw_string(ThemeDB.fallback_font, Vector2(18, 157), "FICTIONAL CITY  ·  PROTOTYPE", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ThemeService.color("map_label"))
+	map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.12, size.y * 0.3), "NORTH DEPOT", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, ThemeService.color("map_label"))
+	map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.57, size.y * 0.67), "MARKET DISTRICT", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, ThemeService.color("map_label"))
 	for order in orders:
 		if order["status"] == "Delivered":
 			continue
 		var point: Vector2 = order["destination"] * size
-		map_view.draw_circle(point, 21, Color("#082c38"))
-		map_view.draw_circle(point, 16, Color("#42d9f3"))
+		map_view.draw_circle(point, 21, ThemeService.color("rider_back"))
+		map_view.draw_circle(point, 16, ThemeService.color("accent_fill"))
 		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), "P", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#06202a"))
 	for rider in riders:
 		var position: Vector2 = rider["position"]
@@ -774,13 +844,15 @@ func _draw_map() -> void:
 				position = Vector2(0.5, 0.5).lerp(target, progress)
 				rider["position"] = position
 		var point := position * size
-		map_view.draw_circle(point, 17, Color("#06242e"))
-		map_view.draw_circle(point, 12, Color("#70e4f3"))
+		map_view.draw_circle(point, 17, ThemeService.color("rider_back"))
+		map_view.draw_circle(point, 12, ThemeService.color("rider"))
 		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), "R", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#06202a"))
 	map_view.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _save_game() -> void:
-	var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if save_recovery_required:
+		return
+	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file == null:
 		return
 	var data := {
@@ -799,20 +871,20 @@ func _save_game() -> void:
 	file.store_string(JSON.stringify(data))
 
 func _load_game() -> void:
-	if not FileAccess.file_exists(SAVE_PATH):
+	if not FileAccess.file_exists(save_path):
 		_new_game()
 		return
-	var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	var file := FileAccess.open(save_path, FileAccess.READ)
 	if file == null:
-		_new_game()
+		save_recovery_required = true
 		return
 	var parsed := JSON.new()
 	if parsed.parse(file.get_as_text()) != OK or typeof(parsed.data) != TYPE_DICTIONARY:
-		_new_game()
+		save_recovery_required = true
 		return
 	var data: Dictionary = parsed.data
 	if int(data.get("version", 0)) != 1:
-		_new_game()
+		save_recovery_required = true
 		return
 	cash = float(data.get("cash", STARTING_CASH))
 	revenue_total = float(data.get("revenue_total", 0))
@@ -821,15 +893,17 @@ func _load_game() -> void:
 	next_order_id = int(data.get("next_order_id", 1))
 	next_rider_id = int(data.get("next_rider_id", 1))
 	elapsed = float(data.get("elapsed", 0))
-	speed = int(data.get("speed", 1))
+	var loaded_speed := int(data.get("speed", 1))
+	speed = 5 if loaded_speed == 4 else loaded_speed if loaded_speed in [1, 2, 5, 10] else 1
 	orders.assign(data.get("orders", []))
 	riders.assign(data.get("riders", []))
+	if riders.is_empty():
+		save_recovery_required = true
+		return
 	for order in orders:
 		order["destination"] = _as_vector2(order.get("destination", ""), Vector2(0.5, 0.5))
 	for rider in riders:
 		rider["position"] = _as_vector2(rider.get("position", ""), Vector2(0.5, 0.5))
-	if riders.is_empty():
-		_new_game()
 	for rider in riders:
 		if rider["status"] == "busy":
 			rider["remaining"] = minf(float(rider["remaining"]), TRAVEL_SECONDS)
@@ -851,6 +925,7 @@ func _as_vector2(value: Variant, fallback: Vector2) -> Vector2:
 	return fallback
 
 func _new_game() -> void:
+	save_recovery_required = false
 	cash = STARTING_CASH
 	revenue_total = 0.0
 	cost_total = 0.0
@@ -860,3 +935,46 @@ func _new_game() -> void:
 	for index in STARTING_RIDERS:
 		riders.append({"id": next_rider_id, "status": "ready", "order_id": -1, "remaining": 0.0, "position": Vector2(0.5, 0.5)})
 		next_rider_id += 1
+	_save_game()
+
+func _show_save_recovery() -> void:
+	if is_instance_valid(recovery_overlay):
+		return
+	recovery_overlay = ColorRect.new()
+	recovery_overlay.color = Color(0.015, 0.04, 0.06, 0.88)
+	recovery_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	recovery_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(recovery_overlay)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	recovery_overlay.add_child(center)
+	var card := PanelContainer.new()
+	card.custom_minimum_size = Vector2(300, 0)
+	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
+	center.add_child(card)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	card.add_child(column)
+	column.add_child(_label("SAVE NEEDS ATTENTION", 17, "#f1f6fa"))
+	column.add_child(_label("Your existing save was kept unchanged. Try loading it again, or start a separate recovery game.", 13, "#a8bac8"))
+	column.add_child(_button("Try Load Again", _retry_load))
+	column.add_child(_button("Start New Game · Keep Old Save", _start_recovery_game))
+
+func _retry_load() -> void:
+	save_recovery_required = false
+	_load_game()
+	if not save_recovery_required:
+		if is_instance_valid(recovery_overlay):
+			recovery_overlay.queue_free()
+		_refresh()
+	else:
+		status_label.text = "Save could not be loaded. The original remains untouched."
+
+func _start_recovery_game() -> void:
+	var session_path := "user://delivery_ops_session_%d.json" % Time.get_unix_time_from_system()
+	save_path = session_path
+	_set_active_save_path(save_path)
+	_new_game()
+	if is_instance_valid(recovery_overlay):
+		recovery_overlay.queue_free()
+	_refresh()
