@@ -1,0 +1,64 @@
+name: Godot Web and GitHub Pages
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: '4.5.1'
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Godot and the matching Web template
+        shell: bash
+        run: |
+          release_url="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable"
+          engine="Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          templates="Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          tools_dir="$RUNNER_TEMP/godot"
+          template_dir="${XDG_DATA_HOME:-$HOME/.local/share}/godot/export_templates/${GODOT_VERSION}.stable"
+
+          mkdir -p "$tools_dir" "$template_dir"
+          curl --fail --location --retry 3 "$release_url/$engine.zip" -o "$tools_dir/godot.zip"
+          curl --fail --location --retry 3 "$release_url/$templates" -o "$tools_dir/templates.tpz"
+          unzip -q "$tools_dir/godot.zip" -d "$tools_dir"
+          unzip -p "$tools_dir/templates.tpz" templates/web_nothreads_release.zip > "$template_dir/web_nothreads_release.zip"
+          mv "$tools_dir/$engine" "$tools_dir/godot"
+          echo "$tools_dir" >> "$GITHUB_PATH"
+
+      - name: Export and verify the Web game
+        run: ./scripts/export-web.sh
+
+      - name: Upload exported game
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/web
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: export
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy exported game
+        id: deployment
+        uses: actions/deploy-pages@v4
