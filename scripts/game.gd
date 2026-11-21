@@ -28,7 +28,12 @@ var pause_button: Button
 var speed_buttons: Dictionary = {}
 var sheet: PanelContainer
 var sheet_content: VBoxContainer
+var sheet_toggle_button: Button
+var map_controls: GridContainer
 var selected_tab := "Map"
+var selected_subtab := "City"
+var sheet_open := true
+var last_tap_msec := 0
 var map_mode := "City"
 var map_zoom := 1.0
 var map_pan := Vector2.ZERO
@@ -42,6 +47,8 @@ var world_map := false
 func _ready() -> void:
 	_load_game()
 	_build_ui()
+	get_viewport().size_changed.connect(_layout_ui)
+	_layout_ui()
 	_refresh()
 	if orders.is_empty():
 		_spawn_order()
@@ -74,8 +81,11 @@ func _build_ui() -> void:
 	top.offset_left = 12
 	top.offset_top = 12
 	top.offset_right = -12
-	top.offset_bottom = 56
-	top.add_theme_stylebox_override("panel", _panel_style("#101e2b", 14))
+	top.offset_bottom = 68
+	var top_style := _panel_style("#101e2b", 14)
+	top_style.content_margin_top = 4
+	top_style.content_margin_bottom = 4
+	top.add_theme_stylebox_override("panel", top_style)
 	add_child(top)
 	var top_row := HBoxContainer.new()
 	top.add_child(top_row)
@@ -84,30 +94,36 @@ func _build_ui() -> void:
 	brand.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	brand.add_theme_color_override("font_color", Color("#91eaff"))
 	top_row.add_child(brand)
+	sheet_toggle_button = _button("Menu", _toggle_sheet)
+	sheet_toggle_button.custom_minimum_size = Vector2(62, 44)
+	top_row.add_child(sheet_toggle_button)
 	cash_label = Label.new()
 	cash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	top_row.add_child(cash_label)
 
-	var map_controls := VBoxContainer.new()
+	map_controls = GridContainer.new()
+	map_controls.columns = 1
 	map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	map_controls.offset_left = -58
+	map_controls.offset_left = -126
 	map_controls.offset_top = 78
-	map_controls.offset_right = -12
-	map_controls.offset_bottom = 245
+	map_controls.offset_right = -10
+	map_controls.offset_bottom = 260
+	map_controls.add_theme_constant_override("h_separation", 4)
+	map_controls.add_theme_constant_override("v_separation", 4)
 	add_child(map_controls)
 	var zoom_in := _button("+", func(): _zoom_map(1.25))
 	var zoom_out := _button("-", func(): _zoom_map(0.8))
 	var recenter := _button("Center", _recenter_map)
 	var overview := _button("Overview", _toggle_world)
 	for control in [zoom_in, zoom_out, recenter, overview]:
-		control.custom_minimum_size = Vector2(46, 44)
+		control.custom_minimum_size = Vector2(112, 44)
 		map_controls.add_child(control)
 
 	sheet = PanelContainer.new()
 	sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	sheet.offset_left = 10
 	sheet.offset_right = -10
-	sheet.offset_top = -226
+	sheet.offset_top = -272
 	sheet.offset_bottom = -72
 	sheet.add_theme_stylebox_override("panel", _panel_style("#101e2b", 18))
 	add_child(sheet)
@@ -115,18 +131,27 @@ func _build_ui() -> void:
 	sheet_content.add_theme_constant_override("separation", 5)
 	sheet.add_child(sheet_content)
 
+	var sheet_header := HBoxContainer.new()
+	sheet_content.add_child(sheet_header)
 	var subtabs := HBoxContainer.new()
-	sheet_content.add_child(subtabs)
-	for name in ["City", "World"]:
-		subtabs.add_child(_button(name, func(): _set_subtab(name)))
+	subtabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sheet_header.add_child(subtabs)
+	var close_sheet := _button("Hide", _toggle_sheet)
+	close_sheet.custom_minimum_size = Vector2(60, 44)
+	sheet_header.add_child(close_sheet)
 	var nav := HBoxContainer.new()
+	nav.add_theme_constant_override("separation", 2)
 	sheet_content.add_child(nav)
-	for name in ["Map", "Fleet", "Finance", "Co."]:
-		var button := _button(name, func(): _set_tab(name))
+	for name in ["Map", "Fleet", "Finance", "Company"]:
+		var internal_tab: String = "Co." if name == "Company" else name
+		var button := _button(name, func(): _set_tab(internal_tab))
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.custom_minimum_size = Vector2(0, 46)
+		button.add_theme_font_size_override("font_size", 13)
 		button.custom_minimum_size.y = 46
 		nav.add_child(button)
 
+	subtabs.name = "Subtabs"
 	order_list = VBoxContainer.new()
 	order_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	sheet_content.add_child(order_list)
@@ -161,9 +186,55 @@ func _panel_style(color: String, radius: int) -> StyleBoxFlat:
 	style.content_margin_bottom = 7
 	return style
 
+func _layout_ui() -> void:
+	if not is_instance_valid(map_view) or not is_instance_valid(sheet):
+		return
+	var window := get_window()
+	if window.size.x > 0 and window.size.y > 0:
+		window.content_scale_size = window.size
+	var viewport_size := get_viewport_rect().size
+	var is_landscape := viewport_size.x > viewport_size.y
+	var selected := _find_order(selected_order)
+	var order_detail_open: bool = selected_tab == "Map" and not selected.is_empty() and selected["status"] == "Waiting"
+	var panel_height: int = 240 if order_detail_open else 200
+	map_controls.columns = 4 if is_landscape else 1
+	if is_landscape:
+		map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT if order_detail_open else Control.PRESET_TOP_RIGHT)
+		map_controls.offset_left = 10 if order_detail_open else -458
+		map_controls.offset_right = 458 if order_detail_open else -10
+		map_controls.offset_top = 72
+		map_controls.offset_bottom = 122
+		for control in map_controls.get_children():
+			control.custom_minimum_size = Vector2(108, 44)
+		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+		sheet.offset_left = -332
+		sheet.offset_right = -10
+		sheet.offset_top = -(panel_height + 72)
+		sheet.offset_bottom = -72
+	else:
+		map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+		map_controls.offset_left = -126
+		map_controls.offset_top = 78
+		map_controls.offset_bottom = 260
+		for control in map_controls.get_children():
+			control.custom_minimum_size = Vector2(112, 44)
+		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+		sheet.offset_left = 10
+		sheet.offset_right = -10
+		sheet.offset_top = -(panel_height + 72)
+		sheet.offset_bottom = -72
+
 func _zoom_map(factor: float) -> void:
+	var center := map_view.size * 0.5
+	var world_center := (center - map_pan) / map_zoom
 	map_zoom = clampf(map_zoom * factor, 0.65, 2.5)
+	map_pan = center - world_center * map_zoom
+	_clamp_map_pan()
 	map_view.queue_redraw()
+
+func _clamp_map_pan() -> void:
+	map_pan.x = clampf(map_pan.x, -map_view.size.x * 0.8, map_view.size.x * 0.8)
+	map_pan.y = clampf(map_pan.y, -map_view.size.y * 0.8, map_view.size.y * 0.8)
 
 func _recenter_map() -> void:
 	map_pan = Vector2.ZERO
@@ -172,19 +243,40 @@ func _recenter_map() -> void:
 
 func _toggle_world() -> void:
 	world_map = not world_map
+	selected_subtab = "World" if world_map else "City"
+	map_mode = selected_subtab
 	map_zoom = 0.7 if world_map else 1.0
 	map_pan = Vector2.ZERO
 	status_label.text = "World overview" if world_map else "City map"
+	_refresh()
 
 func _set_subtab(name: String) -> void:
-	map_mode = name
-	world_map = name == "World"
-	map_view.queue_redraw()
-	status_label.text = name + " map"
+	selected_subtab = name
+	if selected_tab == "Map":
+		map_mode = name
+		world_map = name == "World"
+		map_zoom = 0.7 if world_map else 1.0
+		map_pan = Vector2.ZERO
+		map_view.queue_redraw()
+		status_label.text = name + " map"
+	else:
+		status_label.text = name + " selected"
+	_refresh()
 
 func _set_tab(name: String) -> void:
 	selected_tab = name
+	if name == "Map":
+		selected_subtab = "World" if world_map else "City"
+	else:
+		selected_subtab = {"Fleet":"Riders", "Finance":"Overview", "Co.":"Operations"}.get(name, "City")
+	status_label.text = ""
 	_refresh()
+
+func _toggle_sheet() -> void:
+	sheet_open = not sheet_open
+	sheet.visible = sheet_open
+	if is_instance_valid(sheet_toggle_button):
+		sheet_toggle_button.text = "Hide" if sheet_open else "Menu"
 
 func _on_map_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
@@ -193,11 +285,17 @@ func _on_map_input(event: InputEvent) -> void:
 			gesture_pan = map_pan
 			suppress_tap = false
 		elif not suppress_tap:
-			_select_marker(event.position)
+			var now := Time.get_ticks_msec()
+			if now - last_tap_msec < 320:
+				_zoom_map(1.4)
+			else:
+				_select_marker(event.position)
+			last_tap_msec = now
 	elif event is InputEventScreenDrag:
 		if event.position.distance_to(gesture_start) > 8:
 			suppress_tap = true
 		map_pan = gesture_pan + event.position - gesture_start
+		_clamp_map_pan()
 		map_view.queue_redraw()
 	elif event is InputEventMagnifyGesture:
 		_zoom_map(event.factor)
@@ -219,6 +317,7 @@ func _on_map_input(event: InputEvent) -> void:
 		if event.position.distance_to(gesture_start) > 8:
 			suppress_tap = true
 		map_pan = gesture_pan + event.position - gesture_start
+		_clamp_map_pan()
 		map_view.queue_redraw()
 
 func _select_marker(point: Vector2) -> void:
@@ -250,8 +349,31 @@ func _button(label: String, callback: Callable) -> Button:
 
 func _spawn_order() -> void:
 	if orders.size() >= 5:
-		return
-	var destination := Vector2(randf_range(0.15, 0.85), randf_range(0.2, 0.82))
+		for index in orders.size():
+			if orders[index]["status"] == "Delivered":
+				orders.remove_at(index)
+				break
+		if orders.size() >= 5:
+			return
+	var viewport_size := get_viewport_rect().size
+	var min_x := 0.12
+	var max_x := 0.60
+	var min_y := 0.35
+	var max_y := 0.62
+	if viewport_size.x > viewport_size.y:
+		max_x = 0.52
+		min_y = 0.34
+		max_y = 0.74
+	var destination := Vector2(randf_range(min_x, max_x), randf_range(min_y, max_y))
+	for attempt in 10:
+		var overlaps := false
+		for existing in orders:
+			if existing["status"] != "Delivered" and destination.distance_to(existing["destination"]) < 0.16:
+				overlaps = true
+				break
+		if not overlaps:
+			break
+		destination = Vector2(randf_range(min_x, max_x), randf_range(min_y, max_y))
 	orders.append({
 		"id": next_order_id,
 		"destination": destination,
@@ -340,10 +462,27 @@ func _refresh() -> void:
 	cash_label.text = "$%0.0f" % cash
 	for child in order_list.get_children():
 		child.queue_free()
+	var subtabs: HBoxContainer = sheet_content.find_child("Subtabs", true, false)
+	if is_instance_valid(subtabs):
+		for child in subtabs.get_children():
+			child.queue_free()
+		var options: Array[String] = []
+		match selected_tab:
+			"Map": options = ["City", "World"]
+			"Fleet": options = ["Riders", "Management"]
+			"Finance": options = ["Overview", "Reports"]
+			_: options = ["Operations", "Expansion"]
+		for option in options:
+			var compact_label: String = str({"Management":"Manage", "Operations":"Ops", "Expansion":"Expand"}.get(option, option))
+			var subtab := _button(compact_label, func(): _set_subtab(option))
+			subtab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			subtab.custom_minimum_size = Vector2(0, 44)
+			subtab.add_theme_font_size_override("font_size", 13)
+			subtabs.add_child(subtab)
 	match selected_tab:
 		"Map":
 			var heading := Label.new()
-			heading.text = "CITY MAP  /  FICTIONAL ROADS"
+			heading.text = "WORLD OVERVIEW  /  PROTOTYPE" if world_map else "CITY MAP  /  FICTIONAL ROADS"
 			heading.add_theme_color_override("font_color", Color("#91eaff"))
 			order_list.add_child(heading)
 			var selected := _find_order(selected_order)
@@ -360,21 +499,23 @@ func _refresh() -> void:
 				order_list.add_child(hint)
 		"Fleet":
 			var label := Label.new()
-			label.text = "FLEET  ·  %d riders ready" % _ready_count()
+			label.text = "%s  ·  %d riders ready" % [selected_subtab.to_upper(), _ready_count()]
 			order_list.add_child(label)
-			var hire := _button("Hire rider  ($120)", _hire_rider)
+			var hire := _button("+  Hire rider  ($120)", _hire_rider)
 			hire.custom_minimum_size.y = 46
+			hire.disabled = cash < 120
 			order_list.add_child(hire)
 		"Finance":
 			var label := Label.new()
-			label.text = "FINANCE OVERVIEW"
+			label.text = "FINANCE  /  " + selected_subtab.to_upper()
 			order_list.add_child(label)
 			var figures := Label.new()
-			figures.text = "Cash $%0.0f  ·  Revenue $%0.0f  ·  Costs $%0.0f  ·  Delivered %d" % [cash, revenue_total, cost_total, delivered]
+			figures.text = "Cash $%0.0f  ·  Revenue $%0.0f\nCosts $%0.0f  ·  Delivered %d" % [cash, revenue_total, cost_total, delivered]
+			figures.add_theme_font_size_override("font_size", 13)
 			order_list.add_child(figures)
-		"Company":
+		"Co.", "Company":
 			var label := Label.new()
-			label.text = "OPERATIONS  ·  Phase 1"
+			label.text = selected_subtab.to_upper() + "  ·  Phase 1"
 			order_list.add_child(label)
 			var summary := Label.new()
 			summary.text = "%d active riders  ·  %d deliveries completed" % [riders.size(), delivered]
@@ -383,6 +524,7 @@ func _refresh() -> void:
 	finance_summary = null
 	if is_instance_valid(map_view):
 		map_view.queue_redraw()
+	_layout_ui()
 
 func _ready_count() -> int:
 	var count := 0
@@ -473,6 +615,10 @@ func _load_game() -> void:
 	speed = int(data.get("speed", 1))
 	orders.assign(data.get("orders", []))
 	riders.assign(data.get("riders", []))
+	for order in orders:
+		order["destination"] = _as_vector2(order.get("destination", ""), Vector2(0.5, 0.5))
+	for rider in riders:
+		rider["position"] = _as_vector2(rider.get("position", ""), Vector2(0.5, 0.5))
 	if riders.is_empty():
 		_new_game()
 	for rider in riders:
@@ -481,6 +627,19 @@ func _load_game() -> void:
 			var order := _find_order(rider["order_id"])
 			if not order.is_empty():
 				order["status"] = "On route"
+
+func _as_vector2(value: Variant, fallback: Vector2) -> Vector2:
+	if value is Vector2:
+		return value
+	if value is Array and value.size() >= 2:
+		return Vector2(float(value[0]), float(value[1]))
+	if value is Dictionary and value.has("x") and value.has("y"):
+		return Vector2(float(value["x"]), float(value["y"]))
+	if value is String:
+		var parts: PackedStringArray = value.strip_edges().trim_prefix("(").trim_suffix(")").split(",")
+		if parts.size() >= 2:
+			return Vector2(parts[0].strip_edges().to_float(), parts[1].strip_edges().to_float())
+	return fallback
 
 func _new_game() -> void:
 	cash = STARTING_CASH
