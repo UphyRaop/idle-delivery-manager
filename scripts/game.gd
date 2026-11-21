@@ -51,65 +51,72 @@ func _process(delta: float) -> void:
 	_refresh_map()
 
 func _build_ui() -> void:
+	var inset := MarginContainer.new()
+	inset.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	inset.add_theme_constant_override("margin_left", 12)
+	inset.add_theme_constant_override("margin_right", 12)
+	inset.add_theme_constant_override("margin_top", 10)
+	inset.add_theme_constant_override("margin_bottom", 10)
+	add_child(inset)
+
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 8)
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("separation", 8)
-	root.add_theme_constant_override("margin_right", 14)
-	root.add_theme_constant_override("margin_top", 12)
-	root.add_theme_constant_override("margin_bottom", 12)
-	add_child(root)
+	root.add_theme_constant_override("separation", 6)
+	inset.add_child(root)
 
 	var top := HBoxContainer.new()
 	root.add_child(top)
 	var brand := Label.new()
-	brand.text = "IDM  /  DELIVERY OPERATIONS"
+	brand.text = "IDM  /  DELIVERY OPS"
 	brand.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	brand.add_theme_color_override("font_color", Color("#91eaff"))
+	brand.add_theme_font_size_override("font_size", 15)
 	top.add_child(brand)
 	cash_label = Label.new()
+	cash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	top.add_child(cash_label)
 
-	var stats := HBoxContainer.new()
+	var stats := VBoxContainer.new()
+	stats.add_theme_constant_override("separation", 1)
 	root.add_child(stats)
 	rider_summary = Label.new()
-	rider_summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rider_summary.add_theme_font_size_override("font_size", 14)
 	stats.add_child(rider_summary)
 	finance_summary = Label.new()
-	finance_summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	finance_summary.add_theme_font_size_override("font_size", 14)
 	stats.add_child(finance_summary)
 
 	map_view = Control.new()
-	map_view.custom_minimum_size = Vector2(0, 245)
+	map_view.custom_minimum_size = Vector2(0, 150)
 	map_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	map_view.draw.connect(_draw_map)
 	root.add_child(map_view)
 
 	var map_label := Label.new()
-	map_label.text = "PROTOTYPE CITY MAP  ·  FICTIONAL ROAD LAYOUT"
+	map_label.text = "PROTOTYPE MAP  ·  FICTIONAL ROADS"
 	map_label.add_theme_color_override("font_color", Color("#77dbee"))
 	map_label.add_theme_font_size_override("font_size", 11)
 	root.add_child(map_label)
 
 	var panel := PanelContainer.new()
-	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.custom_minimum_size.y = 170
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color("#101e2b")
-	style.set_corner_radius_all(14)
+	style.set_corner_radius_all(12)
 	panel.add_theme_stylebox_override("panel", style)
 	root.add_child(panel)
 	var inner := VBoxContainer.new()
-	inner.add_theme_constant_override("separation", 6)
+	inner.add_theme_constant_override("separation", 4)
 	panel.add_child(inner)
-	var orders_header := HBoxContainer.new()
-	inner.add_child(orders_header)
+	var header := HBoxContainer.new()
+	inner.add_child(header)
 	var heading := Label.new()
-	heading.text = "INCOMING ORDERS"
+	heading.text = "ORDERS"
 	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	orders_header.add_child(heading)
+	header.add_child(heading)
 	status_label = Label.new()
 	status_label.add_theme_color_override("font_color", Color("#87deef"))
-	orders_header.add_child(status_label)
+	status_label.add_theme_font_size_override("font_size", 11)
+	header.add_child(status_label)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -119,17 +126,22 @@ func _build_ui() -> void:
 	order_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(order_list)
 
-	var actions := HBoxContainer.new()
+	var actions := VBoxContainer.new()
+	actions.add_theme_constant_override("separation", 5)
 	root.add_child(actions)
+	var controls := HBoxContainer.new()
+	controls.add_theme_constant_override("separation", 3)
+	actions.add_child(controls)
 	pause_button = _button("Pause", _toggle_pause)
-	actions.add_child(pause_button)
+	pause_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	controls.add_child(pause_button)
 	for multiplier in [1, 2, 4]:
 		var factor: int = multiplier
-		var button := _button(str(factor) + "×", func(): _set_speed(factor))
-		button.custom_minimum_size.x = 50
-		actions.add_child(button)
-		speed_buttons[factor] = button
-	var hire := _button("＋ Hire rider  ·  $120", _hire_rider)
+		var button := _button(str(factor) + "x", func(): _set_speed(factor))
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.custom_minimum_size.x = 0
+		controls.add_child(button)
+	var hire := _button("Hire rider  ($120)", _hire_rider)
 	hire.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	actions.add_child(hire)
 
@@ -241,23 +253,24 @@ func _refresh() -> void:
 	if not is_instance_valid(order_list):
 		return
 	cash_label.text = "$%0.0f" % cash
-	rider_summary.text = "Riders  %d ready  ·  %d working" % [_ready_count(), riders.size() - _ready_count()]
-	finance_summary.text = "Delivered %d  ·  Net $%0.0f" % [delivered, revenue_total - cost_total]
+	rider_summary.text = "Riders  %d ready / %d working" % [_ready_count(), riders.size() - _ready_count()]
+	finance_summary.text = "Delivered %d  |  Net $%0.0f  |  Cash $%0.0f" % [delivered, revenue_total - cost_total, cash]
 	for child in order_list.get_children():
 		child.queue_free()
 	for order in orders:
 		if order["status"] == "Delivered":
 			continue
 		var row := HBoxContainer.new()
-		row.custom_minimum_size.y = 52
+		row.custom_minimum_size.y = 48
 		order_list.add_child(row)
 		var details := Label.new()
 		details.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		details.text = "Parcel %03d  ·  $%d\n%s" % [order["id"], order["payout"], order["status"]]
+		details.text = "Parcel %03d  |  $%d  |  %s" % [order["id"], order["payout"], order["status"]]
+		details.clip_text = true
 		row.add_child(details)
 		if order["status"] == "Waiting":
 			var dispatch := _button("Dispatch", func(): _dispatch(order["id"]))
-			dispatch.custom_minimum_size = Vector2(96, 44)
+			dispatch.custom_minimum_size = Vector2(92, 44)
 			row.add_child(dispatch)
 		else:
 			var rider_label := Label.new()
