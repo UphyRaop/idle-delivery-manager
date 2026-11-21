@@ -39,7 +39,8 @@
     .status-line { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; font-size: 14px; }
     #percent { color: #8aeeff; font: 600 13px ui-monospace, monospace; }
     .track { height: 4px; overflow: hidden; border-radius: 4px; background: #22384a; margin: 10px 0; }
-    .fill { height: 100%; width: 100%; background: #54e6ff; transform: scaleX(0); transform-origin: left; }
+    .fill { height: 100%; width: 100%; background: #54e6ff; transform-origin: left; }
+    .track[aria-valuenow] .fill { transform: scaleX(var(--fraction, 0)); }
     .track:not([aria-valuenow]) .fill { width: 32%; animation: scan 2s ease-in-out infinite; }
     #support { margin: 0; color: #bbcedb; font-size: 13px; line-height: 1.4; }
     #retry {
@@ -67,6 +68,7 @@
     @media (prefers-reduced-motion: reduce) {
       #loading { transition: none; }
       .flow, .ring, .light, .track:not([aria-valuenow]) .fill { animation: none; }
+      .markers { display: none; }
       .track:not([aria-valuenow]) .fill { transform: translateX(105%); }
     }
   </style>
@@ -109,7 +111,7 @@
         <circle class="ring" cx="705" cy="301" r="8" style="animation-delay: -1s"/>
         <circle class="ring" cx="513" cy="164" r="8" style="animation-delay: -2s"/>
       </g>
-      <g fill="#d1faff" stroke="#0f627a" stroke-width="2">
+      <g class="markers" fill="#d1faff" stroke="#0f627a" stroke-width="2">
         <circle r="5"><animateMotion dur="17s" begin="-8s" repeatCount="indefinite"><mpath href="#route-a"/></animateMotion></circle>
         <circle r="5"><animateMotion dur="21s" begin="-10s" repeatCount="indefinite"><mpath href="#route-b"/></animateMotion></circle>
         <circle r="5"><animateMotion dur="16s" begin="-9s" repeatCount="indefinite"><mpath href="#route-c"/></animateMotion></circle>
@@ -143,8 +145,11 @@
     const retry = document.getElementById('retry');
     const map = loading.querySelector('.map');
     const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    const downloadIdleMs = 120000;
+    const initializationIdleMs = 300000;
     let timeout;
     let lastBytes = 0;
+    let startupPhase;
     let failed = false;
     let ready = false;
 
@@ -164,27 +169,48 @@
       retry.hidden = false;
     }
 
-    function watchForStall() {
+    function watchForStall(phase) {
       clearTimeout(timeout);
+      const updateMessage = phase !== startupPhase || !retry.hidden;
+      startupPhase = phase;
+      retry.hidden = true;
+
+      const initializing = phase === 'initialization';
+      if (updateMessage) {
+        status.textContent = initializing ? 'Preparing game systems'
+          : phase === 'download' ? 'Loading game resources' : 'Initializing engine';
+        support.textContent = initializing ? 'Starting the game.'
+          : phase === 'download' ? 'Downloading the game files.' : 'Connecting to the delivery network.';
+      }
+
+      // Godot cannot report progress during initialization or cancel a pending startup.
+      // Offer recovery on inactivity while still allowing startup to finish.
       timeout = setTimeout(() => {
-        showFailure('Startup stopped responding. Check your connection and try again.');
-      }, 120000);
+        status.textContent = initializing ? 'Startup is taking longer than expected' : 'Download has stopped progressing';
+        support.textContent = initializing ? 'You can keep waiting or retry on an updated browser.'
+          : 'Check your connection. You can keep waiting or retry.';
+        retry.hidden = false;
+      }, initializing ? initializationIdleMs : downloadIdleMs);
     }
 
     function updateProgress(current, total) {
       if (failed || ready) return;
-      if (current > lastBytes) {
-        lastBytes = current;
-        watchForStall();
+      const known = Number.isFinite(total) && total > 0 && Number.isFinite(current) && current >= 0;
+      const phase = known && current >= total ? 'initialization' : 'download';
+      const hasNewBytes = Number.isFinite(current) && current >= 0 && current !== lastBytes;
+      if (hasNewBytes) lastBytes = current;
+      if (hasNewBytes || phase !== startupPhase) watchForStall(phase);
+
+      if (known) {
+        const value = Math.min(100, Math.floor(current / total * 100));
+        progress.setAttribute('aria-valuenow', value);
+        progress.style.setProperty('--fraction', value / 100);
+        percent.textContent = value + '%';
+      } else {
+        progress.removeAttribute('aria-valuenow');
+        progress.style.removeProperty('--fraction');
+        percent.textContent = '';
       }
-      const known = total > 0;
-      const value = known ? Math.min(100, Math.max(0, Math.floor(current / total * 100))) : 0;
-      status.textContent = known && current >= total ? 'Preparing game systems' : 'Loading game resources';
-      support.textContent = known && current >= total ? 'Starting the game.' : 'Downloading the game files.';
-      percent.textContent = known ? value + '%' : '';
-      if (known) progress.setAttribute('aria-valuenow', value);
-      else progress.removeAttribute('aria-valuenow');
-      progress.firstElementChild.style.transform = 'scaleX(' + value / 100 + ')';
     }
 
     function revealGame() {
@@ -208,7 +234,7 @@
     retry.addEventListener('click', () => location.reload());
     syncMotion();
     reducedMotion.addEventListener('change', syncMotion);
-    watchForStall();
+    watchForStall('script');
 
     const engineScript = document.createElement('script');
     engineScript.src = '$GODOT_URL';
@@ -220,7 +246,7 @@
           showFailure('Use an updated browser with WebAssembly and WebGL 2 enabled.');
           return;
         }
-        watchForStall();
+        watchForStall('download');
         await new Engine(config).startGame({ onProgress: updateProgress });
         revealGame();
       } catch {
