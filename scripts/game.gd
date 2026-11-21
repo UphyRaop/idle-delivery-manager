@@ -29,10 +29,15 @@ var speed_buttons: Dictionary = {}
 var sheet: PanelContainer
 var sheet_content: VBoxContainer
 var sheet_toggle_button: Button
+var sheet_header_label: Label
 var map_controls: GridContainer
+var bottom_nav: PanelContainer
+var nav_buttons: Dictionary = {}
+var hud: PanelContainer
+var sim_controls: PanelContainer
 var selected_tab := "Map"
 var selected_subtab := "City"
-var sheet_open := true
+var sheet_expanded := false
 var last_tap_msec := 0
 var map_mode := "City"
 var map_zoom := 1.0
@@ -43,6 +48,9 @@ var pinch_distance := 0.0
 var suppress_tap := false
 var zoom_label: Label
 var world_map := false
+var viewport_size := Vector2(390, 844)
+var safe_insets := Vector4(8, 8, 8, 16)
+var ui_scale := 1.0
 
 func _ready() -> void:
 	_load_game()
@@ -72,157 +80,276 @@ func _process(delta: float) -> void:
 func _build_ui() -> void:
 	map_view = Control.new()
 	map_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	map_view.mouse_filter = Control.MOUSE_FILTER_STOP
 	map_view.draw.connect(_draw_map)
 	map_view.gui_input.connect(_on_map_input)
 	add_child(map_view)
 
-	var top := PanelContainer.new()
-	top.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	top.offset_left = 12
-	top.offset_top = 12
-	top.offset_right = -12
-	top.offset_bottom = 68
-	var top_style := _panel_style("#101e2b", 14)
-	top_style.content_margin_top = 4
-	top_style.content_margin_bottom = 4
-	top.add_theme_stylebox_override("panel", top_style)
-	add_child(top)
+	hud = PanelContainer.new()
+	hud.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	hud.add_theme_stylebox_override("panel", _panel_style("#101e2b", 18))
+	add_child(hud)
 	var top_row := HBoxContainer.new()
-	top.add_child(top_row)
+	top_row.add_theme_constant_override("separation", 10)
+	hud.add_child(top_row)
 	var brand := Label.new()
-	brand.text = "IDM  /  OPERATIONS"
+	brand.text = "IDM"
 	brand.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	brand.add_theme_color_override("font_color", Color("#91eaff"))
+	brand.add_theme_color_override("font_color", Color("#45d9ec"))
+	brand.add_theme_font_size_override("font_size", 19)
 	top_row.add_child(brand)
-	sheet_toggle_button = _button("Menu", _toggle_sheet)
-	sheet_toggle_button.custom_minimum_size = Vector2(62, 44)
-	top_row.add_child(sheet_toggle_button)
+	var balance := VBoxContainer.new()
+	balance.add_theme_constant_override("separation", 0)
+	top_row.add_child(balance)
 	cash_label = Label.new()
 	cash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	top_row.add_child(cash_label)
+	cash_label.add_theme_font_size_override("font_size", 18)
+	cash_label.add_theme_color_override("font_color", Color("#f3f7fb"))
+	balance.add_child(cash_label)
+	var balance_caption := Label.new()
+	balance_caption.text = "AVAILABLE"
+	balance_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	balance_caption.add_theme_font_size_override("font_size", 9)
+	balance_caption.add_theme_color_override("font_color", Color("#91a8ba"))
+	balance.add_child(balance_caption)
+
+	sim_controls = PanelContainer.new()
+	sim_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	sim_controls.add_theme_stylebox_override("panel", _panel_style("#102433", 16))
+	add_child(sim_controls)
+	var sim_row := HBoxContainer.new()
+	sim_row.add_theme_constant_override("separation", 4)
+	sim_controls.add_child(sim_row)
+	pause_button = _button("Pause", _toggle_pause)
+	pause_button.custom_minimum_size = Vector2(70, 46)
+	sim_row.add_child(pause_button)
+	for multiplier in [1, 2, 4]:
+		var factor: int = multiplier
+		var speed_button := _button(str(factor) + "×", func(): _set_speed(factor))
+		speed_button.custom_minimum_size = Vector2(46, 46)
+		speed_button.add_theme_font_size_override("font_size", 14)
+		speed_buttons[factor] = speed_button
+		sim_row.add_child(speed_button)
 
 	map_controls = GridContainer.new()
 	map_controls.columns = 1
-	map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	map_controls.offset_left = -126
-	map_controls.offset_top = 78
-	map_controls.offset_right = -10
-	map_controls.offset_bottom = 260
 	map_controls.add_theme_constant_override("h_separation", 4)
-	map_controls.add_theme_constant_override("v_separation", 4)
+	map_controls.add_theme_constant_override("v_separation", 5)
 	add_child(map_controls)
 	var zoom_in := _button("+", func(): _zoom_map(1.25))
-	var zoom_out := _button("-", func(): _zoom_map(0.8))
+	var zoom_out := _button("−", func(): _zoom_map(0.8))
 	var recenter := _button("Center", _recenter_map)
-	var overview := _button("Overview", _toggle_world)
-	for control in [zoom_in, zoom_out, recenter, overview]:
-		control.custom_minimum_size = Vector2(112, 44)
+	for control in [zoom_in, zoom_out, recenter]:
+		control.custom_minimum_size = Vector2(72, 46)
+		control.add_theme_font_size_override("font_size", 14)
 		map_controls.add_child(control)
 
 	sheet = PanelContainer.new()
 	sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	sheet.offset_left = 10
-	sheet.offset_right = -10
-	sheet.offset_top = -272
-	sheet.offset_bottom = -72
-	sheet.add_theme_stylebox_override("panel", _panel_style("#101e2b", 18))
+	sheet.add_theme_stylebox_override("panel", _panel_style("#102433", 22))
 	add_child(sheet)
 	sheet_content = VBoxContainer.new()
-	sheet_content.add_theme_constant_override("separation", 5)
+	sheet_content.add_theme_constant_override("separation", 6)
 	sheet.add_child(sheet_content)
 
+	var handle_row := CenterContainer.new()
+	handle_row.custom_minimum_size.y = 10
+	sheet_content.add_child(handle_row)
+	var sheet_grabber := ColorRect.new()
+	sheet_grabber.color = Color("#547184")
+	sheet_grabber.custom_minimum_size = Vector2(38, 4)
+	handle_row.add_child(sheet_grabber)
+
 	var sheet_header := HBoxContainer.new()
+	sheet_header.add_theme_constant_override("separation", 8)
 	sheet_content.add_child(sheet_header)
+	sheet_header_label = _label("INCOMING PARCELS", 12, "#91a8ba")
+	sheet_header_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sheet_header.add_child(sheet_header_label)
+	sheet_toggle_button = _button("Expand", _toggle_sheet)
+	sheet_toggle_button.custom_minimum_size = Vector2(76, 44)
+	sheet_header.add_child(sheet_toggle_button)
 	var subtabs := HBoxContainer.new()
+	subtabs.add_theme_constant_override("separation", 5)
 	subtabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sheet_header.add_child(subtabs)
-	var close_sheet := _button("Hide", _toggle_sheet)
-	close_sheet.custom_minimum_size = Vector2(60, 44)
-	sheet_header.add_child(close_sheet)
-	var nav := HBoxContainer.new()
-	nav.add_theme_constant_override("separation", 2)
-	sheet_content.add_child(nav)
+	subtabs.name = "Subtabs"
+	sheet_content.add_child(subtabs)
+	order_list = VBoxContainer.new()
+	order_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	order_list.custom_minimum_size.y = 24
+	order_list.add_theme_constant_override("separation", 8)
+	sheet_content.add_child(order_list)
+	status_label = Label.new()
+	status_label.add_theme_font_size_override("font_size", 13)
+	status_label.add_theme_color_override("font_color", Color("#53d5ba"))
+	sheet_content.add_child(status_label)
+
+	bottom_nav = PanelContainer.new()
+	bottom_nav.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	var nav_style := _panel_style("#0d1e2a", 0)
+	nav_style.content_margin_top = 4
+	nav_style.content_margin_bottom = 4
+	bottom_nav.add_theme_stylebox_override("panel", nav_style)
+	add_child(bottom_nav)
+	var nav_row := HBoxContainer.new()
+	nav_row.add_theme_constant_override("separation", 5)
+	bottom_nav.add_child(nav_row)
 	for name in ["Map", "Fleet", "Finance", "Company"]:
 		var internal_tab: String = "Co." if name == "Company" else name
 		var button := _button(name, func(): _set_tab(internal_tab))
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.custom_minimum_size = Vector2(0, 46)
-		button.add_theme_font_size_override("font_size", 13)
-		button.custom_minimum_size.y = 46
-		nav.add_child(button)
-
-	subtabs.name = "Subtabs"
-	order_list = VBoxContainer.new()
-	order_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	sheet_content.add_child(order_list)
-	status_label = Label.new()
-	status_label.add_theme_color_override("font_color", Color("#87deef"))
-	sheet_content.add_child(status_label)
-
-	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 4)
-	add_child(actions)
-	actions.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	actions.offset_left = 10
-	actions.offset_right = -10
-	actions.offset_top = -64
-	actions.offset_bottom = -8
-	pause_button = _button("Pause", _toggle_pause)
-	pause_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	actions.add_child(pause_button)
-	for multiplier in [1, 2, 4]:
-		var factor: int = multiplier
-		var button := _button(str(factor) + "x", func(): _set_speed(factor))
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		actions.add_child(button)
+		button.custom_minimum_size = Vector2(0, 56)
+		button.add_theme_font_size_override("font_size", 14)
+		nav_buttons[internal_tab] = button
+		nav_row.add_child(button)
 
 func _panel_style(color: String, radius: int) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(color)
 	style.set_corner_radius_all(radius)
-	style.content_margin_left = 10
-	style.content_margin_right = 10
-	style.content_margin_top = 7
-	style.content_margin_bottom = 7
+	style.content_margin_left = 12
+	style.content_margin_right = 12
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
+	style.border_width_left = 1
+	style.border_width_top = 1
+	style.border_width_right = 1
+	style.border_width_bottom = 1
+	style.border_color = Color("#1b3546")
 	return style
 
+func _label(text: String, size: int, color: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", int(round(float(size) * ui_scale)))
+	label.add_theme_color_override("font_color", Color(color))
+	return label
+
 func _layout_ui() -> void:
-	if not is_instance_valid(map_view) or not is_instance_valid(sheet):
+	if not is_instance_valid(map_view) or not is_instance_valid(sheet) or not is_instance_valid(bottom_nav):
 		return
 	var window := get_window()
 	if window.size.x > 0 and window.size.y > 0:
 		window.content_scale_size = window.size
-	var viewport_size := get_viewport_rect().size
+	viewport_size = Vector2(window.size)
+	if viewport_size.x <= 0 or viewport_size.y <= 0:
+		viewport_size = get_viewport_rect().size
+	ui_scale = clampf(minf(viewport_size.x / 390.0, viewport_size.y / 844.0), 1.0, 1.15)
+	safe_insets = _read_safe_insets()
 	var is_landscape := viewport_size.x > viewport_size.y
+	var is_desktop := viewport_size.x >= 1024.0 and viewport_size.y >= 600.0
 	var selected := _find_order(selected_order)
 	var order_detail_open: bool = selected_tab == "Map" and not selected.is_empty() and selected["status"] == "Waiting"
-	var panel_height: int = 240 if order_detail_open else 200
-	map_controls.columns = 4 if is_landscape else 1
+	var nav_height: int = 76 if not is_landscape else 64
+	var sheet_height: int = 258 if sheet_expanded else 148
 	if is_landscape:
-		map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT if order_detail_open else Control.PRESET_TOP_RIGHT)
-		map_controls.offset_left = 10 if order_detail_open else -458
-		map_controls.offset_right = 458 if order_detail_open else -10
-		map_controls.offset_top = 72
-		map_controls.offset_bottom = 122
-		for control in map_controls.get_children():
-			control.custom_minimum_size = Vector2(108, 44)
-		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
-		sheet.offset_left = -332
-		sheet.offset_right = -10
-		sheet.offset_top = -(panel_height + 72)
-		sheet.offset_bottom = -72
+		sheet_height = 222 if sheet_expanded else 122
+	if is_desktop:
+		sheet_height = 260 if sheet_expanded else 128
+	var safe_left := safe_insets.x
+	var safe_top := safe_insets.y
+	var safe_right := safe_insets.z
+	var safe_bottom := safe_insets.w
+
+	hud.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	hud.offset_left = safe_left + 12
+	hud.offset_top = safe_top + 8
+	hud.offset_right = -safe_right - 12
+	hud.offset_bottom = safe_top + 64
+	sim_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	sim_controls.offset_left = safe_left + 12
+	sim_controls.offset_top = safe_top + 72
+	sim_controls.offset_right = safe_left + 252
+	sim_controls.offset_bottom = safe_top + 124
+
+	var controls_on_left := is_landscape and sheet_expanded
+	map_controls.columns = 1
+	map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT if controls_on_left else Control.PRESET_TOP_RIGHT)
+	map_controls.offset_left = safe_left + 12 if controls_on_left else -safe_right - 84
+	map_controls.offset_right = safe_left + 84 if controls_on_left else -safe_right - 12
+	map_controls.offset_top = safe_top + 132
+	map_controls.offset_bottom = safe_top + 284
+
+	bottom_nav.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	if is_desktop:
+		var nav_width := 480.0
+		bottom_nav.offset_left = maxf(safe_left + 12, (viewport_size.x - nav_width) * 0.5)
+		bottom_nav.offset_right = -maxf(safe_right + 12, (viewport_size.x - nav_width) * 0.5)
 	else:
-		map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-		map_controls.offset_left = -126
-		map_controls.offset_top = 78
-		map_controls.offset_bottom = 260
-		for control in map_controls.get_children():
-			control.custom_minimum_size = Vector2(112, 44)
+		bottom_nav.offset_left = safe_left + 8
+		bottom_nav.offset_right = -safe_right - 8
+	bottom_nav.offset_top = -safe_bottom - nav_height
+	bottom_nav.offset_bottom = -safe_bottom
+
+	if is_desktop or is_landscape:
+		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+		sheet.offset_left = -366
+		sheet.offset_right = -safe_right - 12
+		sheet.offset_top = -safe_bottom - nav_height - 8 - sheet_height
+		sheet.offset_bottom = -safe_bottom - nav_height - 8
+	else:
 		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-		sheet.offset_left = 10
-		sheet.offset_right = -10
-		sheet.offset_top = -(panel_height + 72)
-		sheet.offset_bottom = -72
+		sheet.offset_left = safe_left + 10
+		sheet.offset_right = -safe_right - 10
+		sheet.offset_top = -safe_bottom - nav_height - 8 - sheet_height
+		sheet.offset_bottom = -safe_bottom - nav_height - 8
+
+	if is_instance_valid(sheet_toggle_button):
+		sheet_toggle_button.text = "Hide" if sheet_expanded else "Expand"
+	if is_instance_valid(sheet_header_label):
+		sheet_header_label.text = _sheet_title()
+	sheet_content.add_theme_constant_override("separation", 3 if is_landscape and sheet_expanded else 6)
+	if sheet_content.get_child_count() > 0:
+		sheet_content.get_child(0).custom_minimum_size.y = 8 if is_landscape and sheet_expanded else 10
+	if is_instance_valid(sheet_toggle_button):
+		sheet_toggle_button.custom_minimum_size.y = 40 if is_landscape and sheet_expanded else 44
+	if is_instance_valid(order_list):
+		var subtabs: HBoxContainer = sheet_content.find_child("Subtabs", true, false)
+		if is_instance_valid(subtabs):
+			subtabs.visible = sheet_expanded
+			for subtab in subtabs.get_children():
+				subtab.custom_minimum_size.y = 40 if is_landscape and sheet_expanded else 46
+		order_list.visible = sheet_expanded or selected_tab == "Map"
+		if not sheet_expanded and selected_tab == "Map":
+			for child in order_list.get_children():
+				child.visible = false
+			if order_list.get_child_count() > 0:
+				order_list.get_child(0).visible = true
+	if is_instance_valid(status_label):
+		var active_map_order: bool = selected_tab == "Map" and not selected.is_empty() and selected["status"] in ["Waiting", "On route"]
+		status_label.visible = status_label.text != "" and (sheet_expanded or selected_tab == "Map") and not active_map_order
+	for tab in nav_buttons:
+		var nav_button: Button = nav_buttons[tab]
+		var selected_button: bool = tab == selected_tab
+		nav_button.modulate = Color("#3bd5e8") if selected_button else Color("#dbe7ef")
+	map_view.queue_redraw()
+
+func _read_safe_insets() -> Vector4:
+	var insets := Vector4(8, 8, 8, 16)
+	if Engine.has_singleton("JavaScriptBridge"):
+		var bridge: Object = Engine.get_singleton("JavaScriptBridge")
+		if bridge != null:
+			insets.x = maxf(insets.x, _safe_value(bridge, "left"))
+			insets.y = maxf(insets.y, _safe_value(bridge, "top"))
+			insets.z = maxf(insets.z, _safe_value(bridge, "right"))
+			insets.w = maxf(insets.w, _safe_value(bridge, "bottom"))
+	return insets
+
+func _safe_value(bridge: Object, side: String) -> float:
+	var value: Variant = bridge.call("eval", "parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--idm-safe-" + side + "')) || 0", true)
+	if typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT:
+		return clampf(float(value), 0.0, 80.0)
+	return 0.0
+
+func _sheet_title() -> String:
+	match selected_tab:
+		"Map":
+			if sheet_expanded:
+				return "PARCELS  ·  FICTIONAL CITY MAP"
+			return "%d PARCELS WAITING  ·  TAP A PIN" % _waiting_count()
+		"Fleet": return "YOUR FLEET"
+		"Finance": return "COMPANY FINANCES"
+		_: return "COMPANY"
 
 func _zoom_map(factor: float) -> void:
 	var center := map_view.size * 0.5
@@ -252,6 +379,7 @@ func _toggle_world() -> void:
 
 func _set_subtab(name: String) -> void:
 	selected_subtab = name
+	sheet_expanded = true
 	if selected_tab == "Map":
 		map_mode = name
 		world_map = name == "World"
@@ -265,6 +393,7 @@ func _set_subtab(name: String) -> void:
 
 func _set_tab(name: String) -> void:
 	selected_tab = name
+	sheet_expanded = true
 	if name == "Map":
 		selected_subtab = "World" if world_map else "City"
 	else:
@@ -273,10 +402,8 @@ func _set_tab(name: String) -> void:
 	_refresh()
 
 func _toggle_sheet() -> void:
-	sheet_open = not sheet_open
-	sheet.visible = sheet_open
-	if is_instance_valid(sheet_toggle_button):
-		sheet_toggle_button.text = "Hide" if sheet_open else "Menu"
+	sheet_expanded = not sheet_expanded
+	_layout_ui()
 
 func _on_map_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
@@ -326,25 +453,35 @@ func _select_marker(point: Vector2) -> void:
 			var destination: Vector2 = order["destination"] * map_view.size * map_zoom + map_pan
 			if point.distance_to(destination) < 30:
 				selected_order = order["id"]
+				sheet_expanded = true
 				_refresh()
 				return
 
 func _button(label: String, callback: Callable) -> Button:
 	var button := Button.new()
 	button.text = label
-	button.custom_minimum_size.y = 48
+	button.custom_minimum_size.y = 46
 	button.pressed.connect(callback)
-	button.add_theme_color_override("font_color", Color("#eaf7ff"))
+	button.add_theme_font_size_override("font_size", int(round(15.0 * ui_scale)))
+	button.add_theme_color_override("font_color", Color("#eaf2f8"))
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color("#173448")
-	normal.set_corner_radius_all(10)
+	normal.bg_color = Color("#183246")
+	normal.set_corner_radius_all(14)
+	normal.content_margin_left = 10
+	normal.content_margin_right = 10
+	normal.content_margin_top = 5
+	normal.content_margin_bottom = 5
 	button.add_theme_stylebox_override("normal", normal)
 	var hover := normal.duplicate()
-	hover.bg_color = Color("#20516a")
+	hover.bg_color = Color("#244b60")
 	button.add_theme_stylebox_override("hover", hover)
 	var pressed := normal.duplicate()
-	pressed.bg_color = Color("#087a96")
+	pressed.bg_color = Color("#087f98")
 	button.add_theme_stylebox_override("pressed", pressed)
+	var disabled := normal.duplicate()
+	disabled.bg_color = Color("#172a36")
+	button.add_theme_stylebox_override("disabled", disabled)
+	button.add_theme_color_override("font_disabled_color", Color("#667988"))
 	return button
 
 func _spawn_order() -> void:
@@ -424,6 +561,8 @@ func _finish_delivery(rider: Dictionary) -> void:
 	rider["status"] = "ready"
 	rider["order_id"] = -1
 	status_label.text = "Delivered  +$%d  ·  cost $%d" % [payout, operating_cost]
+	# Return control to the map after a completed stop; keep the outcome visible in the compact sheet.
+	sheet_expanded = false
 	_save_game()
 	_refresh()
 
@@ -460,6 +599,8 @@ func _refresh() -> void:
 	if not is_instance_valid(order_list):
 		return
 	cash_label.text = "$%0.0f" % cash
+	if selected_tab == "Map" and status_label.text == "" and _find_order(selected_order).is_empty():
+		status_label.text = "Tap a parcel pin to see payout and dispatch."
 	for child in order_list.get_children():
 		child.queue_free()
 	var subtabs: HBoxContainer = sheet_content.find_child("Subtabs", true, false)
@@ -473,63 +614,106 @@ func _refresh() -> void:
 			"Finance": options = ["Overview", "Reports"]
 			_: options = ["Operations", "Expansion"]
 		for option in options:
-			var compact_label: String = str({"Management":"Manage", "Operations":"Ops", "Expansion":"Expand"}.get(option, option))
-			var subtab := _button(compact_label, func(): _set_subtab(option))
+			var subtab := _button(option, func(): _set_subtab(option))
 			subtab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			subtab.custom_minimum_size = Vector2(0, 44)
-			subtab.add_theme_font_size_override("font_size", 13)
+			subtab.custom_minimum_size = Vector2(0, 46)
+			if option == selected_subtab:
+				subtab.modulate = Color("#43d6e8")
 			subtabs.add_child(subtab)
 	match selected_tab:
 		"Map":
-			var heading := Label.new()
-			heading.text = "WORLD OVERVIEW  /  PROTOTYPE" if world_map else "CITY MAP  /  FICTIONAL ROADS"
-			heading.add_theme_color_override("font_color", Color("#91eaff"))
-			order_list.add_child(heading)
 			var selected := _find_order(selected_order)
 			if not selected.is_empty() and selected["status"] == "Waiting":
-				var detail := Label.new()
-				detail.text = "Parcel %03d   ·   $%d delivery payout" % [selected["id"], selected["payout"]]
+				var detail := _label("PARCEL %03d" % selected["id"], 13, "#91a8ba")
 				order_list.add_child(detail)
+				var payout := _label("$%d delivery payout" % selected["payout"], 20, "#f1f6fa")
+				payout.add_theme_font_size_override("font_size", int(round(20.0 * ui_scale)))
+				order_list.add_child(payout)
 				var dispatch := _button("Dispatch rider", func(): _dispatch(selected["id"]))
-				dispatch.custom_minimum_size.y = 46
+				dispatch.custom_minimum_size.y = 50
+				dispatch.add_theme_color_override("font_color", Color("#04252d"))
+				var dispatch_style := StyleBoxFlat.new()
+				dispatch_style.bg_color = Color("#48d9e9")
+				dispatch_style.set_corner_radius_all(15)
+				dispatch.add_theme_stylebox_override("normal", dispatch_style)
 				order_list.add_child(dispatch)
+			elif not selected.is_empty() and selected["status"] == "On route":
+				order_list.add_child(_label("PARCEL %03d  ·  ON ROUTE" % selected["id"], 16, "#f1f6fa"))
+				order_list.add_child(_label("Your rider is travelling to the drop-off.", 13, "#a8bac8"))
 			else:
-				var hint := Label.new()
-				hint.text = "Tap parcel marker to review."
+				var waiting_count := _waiting_count()
+				var hint := _label("%d parcels waiting" % waiting_count if waiting_count > 0 else "Tap a parcel pin to review", 16, "#f1f6fa")
 				order_list.add_child(hint)
+				if sheet_expanded:
+					order_list.add_child(_label("WORLD OVERVIEW  ·  PROTOTYPE" if world_map else "FICTIONAL CITY MAP", 12, "#91a8ba"))
 		"Fleet":
-			var label := Label.new()
-			label.text = "%s  ·  %d riders ready" % [selected_subtab.to_upper(), _ready_count()]
-			order_list.add_child(label)
-			var hire := _button("+  Hire rider  ($120)", _hire_rider)
-			hire.custom_minimum_size.y = 46
+			var ready_label := _label("%d READY" % _ready_count(), 20, "#f1f6fa")
+			order_list.add_child(ready_label)
+			order_list.add_child(_label("%d on route   ·   %d total riders" % [_busy_count(), riders.size()], 13, "#a8bac8"))
+			var hire := _button("+   Hire rider  ·  $120", _hire_rider)
+			hire.custom_minimum_size.y = 50
 			hire.disabled = cash < 120
 			order_list.add_child(hire)
 		"Finance":
-			var label := Label.new()
-			label.text = "FINANCE  /  " + selected_subtab.to_upper()
-			order_list.add_child(label)
-			var figures := Label.new()
-			figures.text = "Cash $%0.0f  ·  Revenue $%0.0f\nCosts $%0.0f  ·  Delivered %d" % [cash, revenue_total, cost_total, delivered]
-			figures.add_theme_font_size_override("font_size", 13)
-			order_list.add_child(figures)
+			var metrics_row := HBoxContainer.new()
+			metrics_row.add_theme_constant_override("separation", 8)
+			order_list.add_child(metrics_row)
+			metrics_row.add_child(_metric_card("BALANCE", "$%0.0f" % cash))
+			metrics_row.add_child(_metric_card("REVENUE", "$%0.0f" % revenue_total))
+			var totals_row := HBoxContainer.new()
+			totals_row.add_theme_constant_override("separation", 8)
+			order_list.add_child(totals_row)
+			totals_row.add_child(_metric_card("OPERATING COST", "$%0.0f" % cost_total))
+			totals_row.add_child(_metric_card("DELIVERIES", str(delivered)))
 		"Co.", "Company":
-			var label := Label.new()
-			label.text = selected_subtab.to_upper() + "  ·  Phase 1"
-			order_list.add_child(label)
-			var summary := Label.new()
-			summary.text = "%d active riders  ·  %d deliveries completed" % [riders.size(), delivered]
-			order_list.add_child(summary)
+			order_list.add_child(_label("OPERATIONS  ·  PHASE 1", 13, "#91a8ba"))
+			order_list.add_child(_label("%d riders" % riders.size(), 20, "#f1f6fa"))
+			order_list.add_child(_label("%d deliveries completed" % delivered, 14, "#a8bac8"))
 	rider_summary = null
 	finance_summary = null
+	if is_instance_valid(sheet_header_label):
+		sheet_header_label.text = _sheet_title()
 	if is_instance_valid(map_view):
 		map_view.queue_redraw()
 	_layout_ui()
+
+func _metric_card(title: String, value: String) -> Control:
+	var card := PanelContainer.new()
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.custom_minimum_size = Vector2(0, 46)
+	var card_style := _panel_style("#152e3e", 13)
+	card_style.content_margin_left = 8
+	card_style.content_margin_right = 8
+	card_style.content_margin_top = 3
+	card_style.content_margin_bottom = 3
+	card.add_theme_stylebox_override("panel", card_style)
+	var stack := VBoxContainer.new()
+	stack.add_theme_constant_override("separation", 2)
+	card.add_child(stack)
+	stack.add_child(_label(title, 10, "#9db1c1"))
+	var amount := _label(value, 18, "#f1f6fa")
+	amount.add_theme_font_size_override("font_size", int(round(18.0 * ui_scale)))
+	stack.add_child(amount)
+	return card
 
 func _ready_count() -> int:
 	var count := 0
 	for rider in riders:
 		if rider["status"] == "ready":
+			count += 1
+	return count
+
+func _busy_count() -> int:
+	var count := 0
+	for rider in riders:
+		if rider["status"] == "busy":
+			count += 1
+	return count
+
+func _waiting_count() -> int:
+	var count := 0
+	for order in orders:
+		if order["status"] == "Waiting":
 			count += 1
 	return count
 
@@ -542,19 +726,43 @@ func _draw_map() -> void:
 	var size := rect.size
 	if size.x <= 0 or size.y <= 0:
 		return
-	map_view.draw_rect(Rect2(Vector2.ZERO, size), Color("#0a1723"))
+	map_view.draw_rect(Rect2(Vector2.ZERO, size), Color("#091722"))
 	map_view.draw_set_transform(map_pan, 0.0, Vector2(map_zoom, map_zoom))
-	for x in range(-int(size.y), int(size.x) + 100, 84):
-		map_view.draw_line(Vector2(x, 0), Vector2(x + int(size.y * 0.55), size.y), Color("#142b3a"), 8.0, true)
-	for y in range(18, int(size.y), 58):
-		map_view.draw_line(Vector2(0, y), Vector2(size.x, y), Color("#1c3543"), 3.0, true)
-	map_view.draw_line(Vector2(size.x * 0.08, size.y * 0.78), Vector2(size.x * 0.91, size.y * 0.2), Color("#183c4b"), 15.0, true)
+	# Stylized, explicitly fictional neighborhood blocks and named districts.
+	var columns := 7
+	var rows := 9
+	var cell_w := size.x / float(columns)
+	var cell_h := size.y / float(rows)
+	for row in rows:
+		for column in columns:
+			var cell := Rect2(Vector2(column * cell_w + 9, row * cell_h + 10), Vector2(cell_w - 18, cell_h - 20))
+			var block_color := Color("#102632") if (row + column) % 3 != 0 else Color("#112b35")
+			if (row == 2 and column == 1) or (row == 6 and column == 5):
+				block_color = Color("#15362f")
+			map_view.draw_rect(cell, block_color)
+			map_view.draw_rect(cell, Color("#193746"), false, 1.0)
+	# Broad avenues use a dark casing and a lighter center to read as roads at a glance.
+	for column in range(columns + 1):
+		var x := column * cell_w
+		map_view.draw_line(Vector2(x, 0), Vector2(x, size.y), Color("#07131c"), 13.0, true)
+		map_view.draw_line(Vector2(x, 0), Vector2(x, size.y), Color("#284354"), 6.0, true)
+	for row in range(rows + 1):
+		var y := row * cell_h
+		map_view.draw_line(Vector2(0, y), Vector2(size.x, y), Color("#07131c"), 13.0, true)
+		map_view.draw_line(Vector2(0, y), Vector2(size.x, y), Color("#284354"), 6.0, true)
+	# One diagonal connector anchors the prototype city without implying real geography.
+	map_view.draw_line(Vector2(size.x * 0.12, size.y * 0.78), Vector2(size.x * 0.88, size.y * 0.2), Color("#07131c"), 23.0, true)
+	map_view.draw_line(Vector2(size.x * 0.12, size.y * 0.78), Vector2(size.x * 0.88, size.y * 0.2), Color("#355365"), 13.0, true)
+	map_view.draw_string(ThemeDB.fallback_font, Vector2(18, 157), "FICTIONAL CITY  ·  PROTOTYPE", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#7894a5"))
+	map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.12, size.y * 0.3), "NORTH DEPOT", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#7792a1"))
+	map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.57, size.y * 0.67), "MARKET DISTRICT", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#7792a1"))
 	for order in orders:
 		if order["status"] == "Delivered":
 			continue
 		var point: Vector2 = order["destination"] * size
-		map_view.draw_circle(point, 15, Color("#42d9f3"))
-		map_view.draw_circle(point, 4, Color("#e6fcff"))
+		map_view.draw_circle(point, 21, Color("#082c38"))
+		map_view.draw_circle(point, 16, Color("#42d9f3"))
+		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), "P", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#06202a"))
 	for rider in riders:
 		var position: Vector2 = rider["position"]
 		if rider["status"] == "busy":
@@ -562,12 +770,13 @@ func _draw_map() -> void:
 			if not order.is_empty():
 				var target: Vector2 = order["destination"]
 				var progress := clampf(1.0 - rider["remaining"] / TRAVEL_SECONDS, 0.0, 1.0)
+				map_view.draw_line(Vector2(0.5, 0.5) * size, target * size, Color(0.25, 0.82, 0.9, 0.55), 3.0, true)
 				position = Vector2(0.5, 0.5).lerp(target, progress)
 				rider["position"] = position
 		var point := position * size
-		map_view.draw_circle(point, 13, Color("#073746"))
-		map_view.draw_circle(point, 8, Color("#65e5fa"))
-		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 4), "R", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#06202a"))
+		map_view.draw_circle(point, 17, Color("#06242e"))
+		map_view.draw_circle(point, 12, Color("#70e4f3"))
+		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), "R", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#06202a"))
 	map_view.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _save_game() -> void:
