@@ -8,6 +8,7 @@ func _initialize() -> void:
 	_test_save_slots()
 	_test_ledger()
 	_test_clock()
+	_test_geographic_data()
 	print("RESULT: %d passed, %d failed" % [passed, failed])
 	quit(1 if failed else 0)
 
@@ -77,3 +78,18 @@ func _test_clock() -> void:
 	clock.set_paused(true)
 	_check(clock.advance(5.0) == 0, "pause prevents simulation advancement")
 	_check(not clock.set_speed(4), "unsupported simulation speed rejected")
+
+func _test_geographic_data() -> void:
+	var geography := IDMGeographicService.new()
+	_check(geography.load_data(), "bundled OSM spawn and locality data load")
+	_check(geography.spawn_points.size() >= 1000, "KL/Selangor includes a useful road-based spawn set")
+	_check(geography.places.any(func(place: Dictionary) -> bool: return place.get("name", "") == "Kuala Lumpur"), "real Kuala Lumpur place label is present")
+	var uv := geography.geo_to_uv(3.139, 101.686)
+	var ll := geography.uv_to_geo(uv)
+	_check(absf(ll.x - 101.686) < 0.00001 and absf(ll.y - 3.139) < 0.00001, "WGS84 and Web Mercator UV transforms round trip")
+	var mobile_size := Vector2(390, 844)
+	var points_visible := true
+	for sample in 100:
+		var point := geography.random_road_location(mobile_size)
+		points_visible = points_visible and point.x > 0.2 and point.x < 0.8 and point.y >= 0.2 and point.y <= 0.68
+	_check(points_visible, "100 sampled road booking points are visible at mobile portrait size")

@@ -1,0 +1,12 @@
+Map data © OpenStreetMap contributors.
+
+The bundled Kuala Lumpur / central Selangor road geometry is derived from the
+Geofabrik Malaysia-Singapore-Brunei OpenStreetMap extract dated 2026-11-21.
+OpenStreetMap data is made available under the Open Database License (ODbL)
+1.0: https://www.openstreetmap.org/copyright
+
+The bundled overview textures are renderings of the same OSM-derived road
+database. Source extract: https://download.geofabrik.de/asia/malaysia-singapore-brunei.html
+The map only covers the area and road classes recorded in
+kl_selangor_roads.metadata.json; it is not a live map or a complete Malaysian
+road database. City and locality tags are taken from the same source extract.
