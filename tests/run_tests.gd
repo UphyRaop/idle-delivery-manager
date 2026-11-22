@@ -9,6 +9,7 @@ func _initialize() -> void:
 	_test_ledger()
 	_test_clock()
 	_test_geographic_data()
+	_test_ui_design_tokens()
 	print("RESULT: %d passed, %d failed" % [passed, failed])
 	quit(1 if failed else 0)
 
@@ -93,3 +94,11 @@ func _test_geographic_data() -> void:
 		var point := geography.random_road_location(mobile_size)
 		points_visible = points_visible and point.x > 0.2 and point.x < 0.8 and point.y >= 0.2 and point.y <= 0.68
 	_check(points_visible, "100 sampled road booking points are visible at mobile portrait size")
+
+func _test_ui_design_tokens() -> void:
+	var theme: Node = load("res://scripts/services/theme_service.gd").new()
+	_check(theme.space("sm") < theme.space("md") and theme.space("md") < theme.space("lg"), "shared UI spacing tokens have a compact ordered scale")
+	_check(theme.font_size("caption") >= 11 and theme.font_size("body") >= 14, "shared text tokens retain readable caption and body sizes")
+	_check(theme.control_height("compact") >= 44 and theme.control_width("speed") >= 44, "shared compact controls meet practical touch target dimensions")
+	_check(theme.panel_padding("compact") < theme.space("md"), "compact panels use reduced shared padding")
+	theme.free()
