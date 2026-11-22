@@ -19,8 +19,8 @@
   "use strict";
 
   const STYLE_URLS = {
-    dark: "https://vector.openstreetmap.org/styles/shortbread/eclipse.json",
-    light: "https://vector.openstreetmap.org/styles/shortbread/colorful.json",
+    dark: "https://tiles.openfreemap.org/styles/dark",
+    light: "https://tiles.openfreemap.org/styles/positron",
   };
   const START_CENTER = [101.6869, 3.1390]; // Kuala Lumpur, WGS84 lon/lat.
   const START_ZOOM = 10.6;
@@ -94,7 +94,10 @@
         zoom: START_ZOOM,
         minZoom: MIN_ZOOM,
         maxZoom: MAX_ZOOM,
-        attributionControl: { compact: true },
+        // OpenFreeMap serves CORS-enabled styles and tiles suitable for use
+        // from this production origin. Keep its required source attribution
+        // expanded so it remains legible on mobile.
+        attributionControl: false,
         logoPosition: "bottom-left",
         pitch: 0,
         bearing: 0,
@@ -110,6 +113,7 @@
         clickTolerance: 8,
         trackResize: true,
       });
+      map.addControl(new window.maplibregl.AttributionControl({ compact: false }), "top-left");
       appliedTheme = themeMode;
 
       map.touchZoomRotate.disableRotation();
@@ -189,11 +193,15 @@
           }
         }
       }
-      if (layer.type !== "line" || !/(street|road)/i.test(layer.id)) return;
+      if (layer.type !== "line" || !/(street|road|highway_)/i.test(layer.id)) return;
       const id = layer.id.toLowerCase();
       let width;
       if (/(motorway|trunk)/.test(id)) {
         width = ["interpolate", ["linear"], ["zoom"], 5, 0.55, 9, 0.8, 12, 1.25, 14, 1.8, 18, 3.8];
+      } else if (/highway_major/.test(id)) {
+        width = ["interpolate", ["linear"], ["zoom"], 7, 0.35, 10, 0.65, 13, 1.05, 16, 2.1, 18, 2.8];
+      } else if (/highway_minor|highway_path/.test(id)) {
+        width = ["interpolate", ["linear"], ["zoom"], 10, 0.25, 12, 0.4, 14, 0.7, 16, 1.2, 18, 1.6];
       } else if (/(primary|secondary)/.test(id)) {
         width = ["interpolate", ["linear"], ["zoom"], 8, 0.35, 11, 0.7, 14, 1.15, 18, 2.7];
       } else if (/tertiary/.test(id)) {
@@ -201,15 +209,15 @@
       } else {
         width = ["interpolate", ["linear"], ["zoom"], 11, 0.28, 12, 0.45, 14, 0.75, 18, 1.8];
       }
-      if (/:bridge$|:tunnel$|:bridge:/.test(id) || /:outline/.test(id) || /outline:/.test(id)) {
+      if (/(casing|:bridge$|:tunnel$|:bridge:|:outline|outline:)/.test(id)) {
         width = ["interpolate", ["linear"], ["zoom"], 8, 0.45, 12, 0.75, 14, 1.15, 18, 2.2];
       }
       try { map.setPaintProperty(layer.id, "line-width", width); }
       catch (error) { emit("idm-map-style-warning", { layer: layer.id, message: String(error && error.message ? error.message : error) }); }
       if (themeMode === "dark") {
-        const isOutline = /outline/.test(id) || /:bridge|:tunnel/.test(id);
+        const isOutline = /outline|casing/.test(id) || /:bridge|:tunnel/.test(id);
         const major = /(motorway|trunk|primary)/.test(id);
-        const secondary = /secondary/.test(id);
+        const secondary = /secondary|highway_major/.test(id);
         const color = isOutline ? "#2b3e4b" : major ? "#718e9e" : secondary ? "#5c7585" : "#49616f";
         try { map.setPaintProperty(layer.id, "line-color", color); } catch (_) { /* Skip style-specific unsupported paint. */ }
       }
@@ -217,7 +225,7 @@
     map.getStyle().layers.forEach(function (layer) {
       if (layer.type !== "symbol") return;
       const id = layer.id.toLowerCase();
-      if (id === "label-place-suburb" || id === "label-place-village") {
+      if (id === "label-place-suburb" || id === "label-place-village" || id === "place_suburb" || id === "place_village") {
         try { map.setLayerZoomRange(layer.id, 12.5, layer.maxzoom || 24); } catch (_) { /* Keep provider defaults if unavailable. */ }
       }
     });

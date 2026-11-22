@@ -4,13 +4,13 @@ The browser build uses locally bundled MapLibre GL JS 5.24.0 to render the basem
 
 ## Data and terms
 
-The current public style and vector tiles are served by the OpenStreetMap Foundation Shortbread vector tile service:
+The game uses OpenFreeMap's public MapLibre styles and vector tiles:
 
-- Style: `https://vector.openstreetmap.org/styles/shortbread/eclipse.json` (dark) and `colorful.json` (light).
-- TileJSON: `https://vector.openstreetmap.org/shortbread_v1/tilejson.json`.
-- Source data: OpenStreetMap contributors, licensed under the Open Database License (ODbL); attribution is shown in the map control.
+- Styles: `https://tiles.openfreemap.org/styles/dark` and `https://tiles.openfreemap.org/styles/positron`.
+- The service documents the public instance as free for production use without registration, API keys, or request limits; confirm current terms before materially scaling traffic.
+- Source data: OpenStreetMap contributors, licensed under the Open Database License (ODbL); MapLibre's expanded attribution control displays OpenFreeMap, OpenMapTiles, and OSM credit.
 - MapLibre GL JS: BSD 3-Clause; the vendored license is `web/vendor/MAPLIBRE-LICENSE.txt`.
 
-The map requests the current viewport only. The game does not bulk-download, prefetch, or bundle OSM tiles, and it does not bypass the provider cache headers. The OSMF vector service is a community-provided best-effort service without a production SLA or guaranteed capacity. Do not treat it as unlimited hosting; monitor its published usage policy and migrate to an explicitly permitted provider if traffic grows beyond ordinary interactive use. No paid API key or Cloudflare dependency is used.
+The map requests the current viewport only. The game does not bulk-download, prefetch, or bundle map tiles, and it does not bypass provider cache headers. OpenFreeMap operates a public service with no paid key requirement; its documented no-request-limit policy is not an SLA or guaranteed availability. Monitor the provider terms and service status as traffic grows. No paid API key or Cloudflare dependency is used.
 
-The OSMF shortbread tiles currently advertise maximum zoom 14. MapLibre permits smooth overzoom beyond that level, but no extra source detail appears above the tile data maximum. The Godot routing network remains the separate KL/Selangor dataset; basemap coverage elsewhere does not imply playable routing coverage there.
+The OpenFreeMap vector source provides detailed global basemap data with its published maximum zoom. The Godot routing network remains the separate KL/Selangor dataset; basemap coverage elsewhere does not imply playable routing coverage there.

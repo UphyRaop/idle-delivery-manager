@@ -61,6 +61,7 @@ var selected_tab := "Map"
 var selected_subtab := "City"
 var sheet_expanded := false
 var last_tap_msec := 0
+var last_touch_input_msec := -1000
 var map_mode := "City"
 var map_camera := IDMMapCamera.new()
 var followed_rider_id := -1
@@ -331,12 +332,12 @@ func _build_ui() -> void:
 	map_controls.add_theme_constant_override("h_separation", 4)
 	map_controls.add_theme_constant_override("v_separation", 5)
 	add_child(map_controls)
-	var zoom_in := _button("+", func(): _zoom_map(1.25))
-	var zoom_out := _button("−", func(): _zoom_map(0.8))
+	var zoom_in := _button("Zoom +", func(): _zoom_map(1.25))
+	var zoom_out := _button("Zoom -", func(): _zoom_map(0.8))
 	var recenter := _button("Center", _recenter_map)
 	for control in [zoom_in, zoom_out]:
-		control.custom_minimum_size = Vector2(62, 58)
-		control.add_theme_font_size_override("font_size", 22)
+		control.custom_minimum_size = Vector2(82, 58)
+		control.add_theme_font_size_override("font_size", 14)
 		map_controls.add_child(control)
 	recenter.custom_minimum_size = Vector2(72, 54)
 	for control in [recenter]:
@@ -468,8 +469,8 @@ func _layout_ui() -> void:
 	var controls_on_left := is_landscape
 	map_controls.columns = 1
 	map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT if controls_on_left else Control.PRESET_TOP_RIGHT)
-	map_controls.offset_left = safe_left + 12 if controls_on_left else -safe_right - 84
-	map_controls.offset_right = safe_left + 84 if controls_on_left else -safe_right - 12
+	map_controls.offset_left = safe_left + 12 if controls_on_left else -safe_right - 102
+	map_controls.offset_right = safe_left + 102 if controls_on_left else -safe_right - 12
 	map_controls.offset_top = safe_top + 148
 	map_controls.offset_bottom = safe_top + 300
 
@@ -801,6 +802,9 @@ func _toggle_sheet() -> void:
 func _on_map_input(event: InputEvent) -> void:
 	if _maplibre_active():
 		if event is InputEventScreenTouch:
+			# Web browsers synthesize compatibility mouse events after touch. Do
+			# not let one finger tap be interpreted a second time as a double-tap.
+			last_touch_input_msec = Time.get_ticks_msec()
 			if event.pressed:
 				touch_points[event.index] = event.position
 				if touch_points.size() == 1:
@@ -823,6 +827,8 @@ func _on_map_input(event: InputEvent) -> void:
 				suppress_tap = true
 				_stop_follow_for_manual_gesture()
 		elif event is InputEventMouseButton:
+			if event.button_index == MOUSE_BUTTON_LEFT and Time.get_ticks_msec() - last_touch_input_msec < 700:
+				return
 			if event.button_index == MOUSE_BUTTON_LEFT and event.pressed and event.double_click:
 				pending_tap = false
 				pending_tap_generation += 1
