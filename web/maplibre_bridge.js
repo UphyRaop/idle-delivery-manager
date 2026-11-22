@@ -19,8 +19,8 @@
   "use strict";
 
   const STYLE_URLS = {
-    dark: "https://vector.openstreetmap.org/styles/shortbread/eclipse.json",
-    light: "https://vector.openstreetmap.org/styles/shortbread/colorful.json",
+    dark: "https://tiles.openfreemap.org/styles/dark",
+    light: "https://tiles.openfreemap.org/styles/positron",
   };
   const START_CENTER = [101.6869, 3.1390]; // Kuala Lumpur, WGS84 lon/lat.
   const START_ZOOM = 10.6;
@@ -43,6 +43,8 @@
   const blockedPointers = new Set();
   const activePointers = new Map();
   const activeTouches = new Map();
+  let lastTouchTap = null;
+  let touchDoubleTapPending = false;
   let canvasEventsBound = false;
 
   function ensureRoot() {
@@ -94,7 +96,10 @@
         zoom: START_ZOOM,
         minZoom: MIN_ZOOM,
         maxZoom: MAX_ZOOM,
-        attributionControl: { compact: true },
+        // OpenFreeMap serves CORS-enabled styles and tiles suitable for use
+        // from this production origin. Keep its required source attribution
+        // expanded so it remains legible on mobile.
+        attributionControl: false,
         logoPosition: "bottom-left",
         pitch: 0,
         bearing: 0,
@@ -102,7 +107,10 @@
         dragRotate: false,
         touchPitch: false,
         touchZoomRotate: true,
-        doubleClickZoom: true,
+        // Touch double-taps are handled explicitly below. This avoids relying
+        // on browser-generated dblclick events, which mobile Safari does not
+        // consistently emit for a canvas.
+        doubleClickZoom: false,
         scrollZoom: true,
         boxZoom: false,
         keyboard: false,
@@ -110,6 +118,7 @@
         clickTolerance: 8,
         trackResize: true,
       });
+      map.addControl(new window.maplibregl.AttributionControl({ compact: false }), "top-left");
       appliedTheme = themeMode;
 
       map.touchZoomRotate.disableRotation();
@@ -189,11 +198,15 @@
           }
         }
       }
-      if (layer.type !== "line" || !/(street|road)/i.test(layer.id)) return;
+      if (layer.type !== "line" || !/(street|road|highway_)/i.test(layer.id)) return;
       const id = layer.id.toLowerCase();
       let width;
       if (/(motorway|trunk)/.test(id)) {
         width = ["interpolate", ["linear"], ["zoom"], 5, 0.55, 9, 0.8, 12, 1.25, 14, 1.8, 18, 3.8];
+      } else if (/highway_major/.test(id)) {
+        width = ["interpolate", ["linear"], ["zoom"], 7, 0.35, 10, 0.65, 13, 1.05, 16, 2.1, 18, 2.8];
+      } else if (/highway_minor|highway_path/.test(id)) {
+        width = ["interpolate", ["linear"], ["zoom"], 10, 0.25, 12, 0.4, 14, 0.7, 16, 1.2, 18, 1.6];
       } else if (/(primary|secondary)/.test(id)) {
         width = ["interpolate", ["linear"], ["zoom"], 8, 0.35, 11, 0.7, 14, 1.15, 18, 2.7];
       } else if (/tertiary/.test(id)) {
@@ -201,15 +214,15 @@
       } else {
         width = ["interpolate", ["linear"], ["zoom"], 11, 0.28, 12, 0.45, 14, 0.75, 18, 1.8];
       }
-      if (/:bridge$|:tunnel$|:bridge:/.test(id) || /:outline/.test(id) || /outline:/.test(id)) {
+      if (/(casing|:bridge$|:tunnel$|:bridge:|:outline|outline:)/.test(id)) {
         width = ["interpolate", ["linear"], ["zoom"], 8, 0.45, 12, 0.75, 14, 1.15, 18, 2.2];
       }
       try { map.setPaintProperty(layer.id, "line-width", width); }
       catch (error) { emit("idm-map-style-warning", { layer: layer.id, message: String(error && error.message ? error.message : error) }); }
       if (themeMode === "dark") {
-        const isOutline = /outline/.test(id) || /:bridge|:tunnel/.test(id);
+        const isOutline = /outline|casing/.test(id) || /:bridge|:tunnel/.test(id);
         const major = /(motorway|trunk|primary)/.test(id);
-        const secondary = /secondary/.test(id);
+        const secondary = /secondary|highway_major/.test(id);
         const color = isOutline ? "#2b3e4b" : major ? "#718e9e" : secondary ? "#5c7585" : "#49616f";
         try { map.setPaintProperty(layer.id, "line-color", color); } catch (_) { /* Skip style-specific unsupported paint. */ }
       }
@@ -217,7 +230,7 @@
     map.getStyle().layers.forEach(function (layer) {
       if (layer.type !== "symbol") return;
       const id = layer.id.toLowerCase();
-      if (id === "label-place-suburb" || id === "label-place-village") {
+      if (id === "label-place-suburb" || id === "label-place-village" || id === "place_suburb" || id === "place_village") {
         try { map.setLayerZoomRange(layer.id, 12.5, layer.maxzoom || 24); } catch (_) { /* Keep provider defaults if unavailable. */ }
       }
     });
@@ -430,13 +443,18 @@
     const beginning = type === "pointerdown" || type === "touchstart" || type === "mousedown";
     const moving = type === "pointermove" || type === "touchmove" || type === "mousemove";
 
+    // Godot also forwards the same browser touch stream from its input callback.
+    // The captured native PointerEvents are authoritative; do not replay their
+    // compatibility copy into MapLibre or overwrite the tap recognizer state.
+    if (!event.isTrusted && activePointers.has(id) && activePointers.get(id).native && (kind === "touch" || type.indexOf("touch") === 0 || type === "pointerup" || type === "pointermove")) return true;
+
     if (beginning) {
       if (pointIsBlocked(point.x, point.y)) {
         blockedPointers.add(id);
         return false;
       }
       blockedPointers.delete(id);
-      const record = { id: id, kind: kind, x: point.x, y: point.y, screenX: Number(event.screenX || point.x), screenY: Number(event.screenY || point.y) };
+      const record = { id: id, kind: kind, x: point.x, y: point.y, startX: point.x, startY: point.y, moved: false, startedAt: performance.now(), native: Boolean(event.isTrusted), screenX: Number(event.screenX || point.x), screenY: Number(event.screenY || point.y) };
       activePointers.set(id, record);
       if (kind === "touch" || type === "touchstart") {
         activePointers.get(id).kind = "touch";
@@ -451,6 +469,7 @@
     if (moving) {
       if (blockedPointers.has(id)) return false;
       const active = activePointers.get(id);
+      if (active && active.kind === "touch" && Math.hypot(point.x - active.startX, point.y - active.startY) > 12) active.moved = true;
       // A forwarded stream that enters an overlay is cancelled at the map and
       // remains blocked until its matching release, so it cannot drag behind UI.
       if (pointIsBlocked(point.x, point.y)) {
@@ -476,6 +495,17 @@
       }
       const active = activePointers.get(id);
       const record = active || { id: id, kind: kind, x: point.x, y: point.y, screenX: point.x, screenY: point.y };
+      if (active && active.kind === "touch" && active.native && active.moved !== true && type !== "pointercancel" && type !== "touchcancel") {
+        const now = performance.now();
+        const closeToPrevious = lastTouchTap && now - lastTouchTap.at <= 360 && Math.hypot(point.x - lastTouchTap.x, point.y - lastTouchTap.y) <= 40;
+        if (closeToPrevious) {
+          touchDoubleTapPending = true;
+          lastTouchTap = null;
+          zoomBy(1.5, [point.x, point.y], 200);
+        } else {
+          lastTouchTap = { at: now, x: point.x, y: point.y };
+        }
+      }
       if (record.kind === "touch" || type === "touchend" || type === "touchcancel") {
         activeTouches.delete(id);
         record.x = point.x; record.y = point.y;
@@ -494,8 +524,7 @@
     }
     if (type === "dblclick" || type === "doubleclick") {
       if (pointIsBlocked(point.x, point.y)) return false;
-      dispatchMouse("dblclick", event, point, id);
-      return true;
+      return zoomBy(1.5, [point.x, point.y], 200);
     }
     return false;
   }
@@ -585,6 +614,7 @@
     setBlockRects: setBlockRects,
     fitRoute: fitRoute,
     forwardPointerEvent: forwardPointerEvent,
+    consumeTouchDoubleTap: function () { const pending = touchDoubleTapPending; touchDoubleTapPending = false; return pending; },
     setFollowTarget: setFollowTarget,
     isFollowing: function () { return Boolean(followTarget); },
     stopFollow: stopFollow,
