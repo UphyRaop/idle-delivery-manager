@@ -260,7 +260,7 @@ func _build_ui() -> void:
 	var sheet_header := HBoxContainer.new()
 	sheet_header.add_theme_constant_override("separation", 8)
 	sheet_content.add_child(sheet_header)
-	sheet_header_label = _label("INCOMING PARCELS", 12, "#91a8ba")
+	sheet_header_label = _label("INCOMING BOOKINGS", 12, "#91a8ba")
 	sheet_header_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sheet_header.add_child(sheet_header_label)
 	sheet_toggle_button = _button("Expand", _toggle_sheet)
@@ -409,7 +409,9 @@ func _layout_ui() -> void:
 	if is_instance_valid(order_list):
 		var subtabs: HBoxContainer = sheet_content.find_child("Subtabs", true, false)
 		if is_instance_valid(subtabs):
-			subtabs.visible = sheet_expanded
+			# Keep the dispatch action above the bottom navigation on short screens.
+			# City/World navigation remains available again when the order card closes.
+			subtabs.visible = sheet_expanded and not order_detail_open
 			for subtab in subtabs.get_children():
 				subtab.custom_minimum_size.y = 40 if is_landscape and sheet_expanded else 46
 		order_list.visible = sheet_expanded or selected_tab == "Map"
@@ -449,7 +451,7 @@ func _sheet_title() -> String:
 		"Map":
 			if sheet_expanded:
 				return "KL + SELANGOR  ·  OPENSTREETMAP" if geographic_map_available and not legacy_map_mode else "PARCELS  ·  FICTIONAL CITY MAP"
-			return "%d PARCELS WAITING  ·  TAP A PIN" % _waiting_count()
+			return "%d BOOKINGS WAITING  ·  TAP A PIN" % _waiting_count()
 		"Operations": return "OPERATIONS  ·  " + selected_subtab.to_upper()
 		"Finance": return "COMPANY FINANCES"
 		_: return "SETTINGS  ·  " + selected_subtab.to_upper()
@@ -739,8 +741,15 @@ func _spawn_order() -> void:
 						break
 	if duplicate_point:
 		return
+	var service_id: String = IDMServicePricing.service_ids().pick_random()
+	var route_distance_km := float(dropoff_route.get("distance_km", 0.0))
+	var route_eta_seconds := float(dropoff_route.get("estimated_time_seconds", 0.0))
+	var price_quote := IDMServicePricing.quote(service_id, route_distance_km, route_eta_seconds)
+	var estimated_fare := float(price_quote.get("total_rm", randi_range(55, 105)))
 	var order := {
 		"id": next_order_id,
+		"service_type": service_id,
+		"price_quote": price_quote,
 		"pickup": pickup,
 		"destination": destination,
 		"pickup_latitude": geographic_service.uv_to_geo(pickup).y if geographic_map_available and not legacy_map_mode else null,
@@ -748,11 +757,11 @@ func _spawn_order() -> void:
 		"destination_latitude": geographic_service.uv_to_geo(destination).y if geographic_map_available and not legacy_map_mode else null,
 		"destination_longitude": geographic_service.uv_to_geo(destination).x if geographic_map_available and not legacy_map_mode else null,
 		"coordinate_reference": "EPSG:4326" if geographic_map_available and not legacy_map_mode else "legacy_normalized",
-		"payout": randi_range(55, 105),
+		"payout": estimated_fare,
 		"status": "Waiting",
 		"rider": -1,
-		"route_distance_km": float(dropoff_route.get("distance_km", 0.0)),
-		"route_eta_seconds": float(dropoff_route.get("estimated_time_seconds", 0.0)),
+		"route_distance_km": route_distance_km,
+		"route_eta_seconds": route_eta_seconds,
 	}
 	orders.append(order)
 	next_order_id += 1
@@ -760,7 +769,7 @@ func _spawn_order() -> void:
 	_refresh()
 
 func _random_order_location(view_size: Vector2) -> Vector2:
-	# Keep new parcel pins clear of the HUD, simulation buttons, compact map
+	# Keep new booking pins clear of the HUD, simulation buttons, compact map
 	# panels, map controls, and bottom navigation. In landscape the panel is at
 	# the right, so jobs remain visible and tappable on the map's left side.
 	for _attempt in 128:
@@ -882,7 +891,7 @@ func _finish_delivery(rider: Dictionary) -> void:
 	rider.erase("route_state")
 	rider["position"] = order["destination"]
 	route_simulations.erase(int(rider.get("id", -1)))
-	status_label.text = "Delivered  +RM%d  ·  cost RM%d" % [payout, operating_cost]
+	status_label.text = "Delivered  +RM%.2f  ·  cost RM%.2f" % [payout, operating_cost]
 	# Return control to the map after a completed stop; keep the outcome visible in the compact sheet.
 	sheet_expanded = false
 	_save_game()
@@ -927,11 +936,11 @@ func _find_order(order_id: int) -> Dictionary:
 func _refresh() -> void:
 	if not is_instance_valid(order_list):
 		return
-	cash_label.text = "RM%0.0f" % cash
+	cash_label.text = "RM%0.2f" % cash
 	active_jobs_label.text = "ACTIVE  %d" % _busy_count()
 	pending_jobs_label.text = "ORDERS  %d" % _waiting_count()
 	if selected_tab == "Map" and status_label.text == "" and _find_order(selected_order).is_empty():
-		status_label.text = "Tap a parcel pin to see payout and dispatch."
+		status_label.text = "Tap a booking pin to review and dispatch."
 	for child in order_list.get_children():
 		child.queue_free()
 	var subtabs: HBoxContainer = sheet_content.find_child("Subtabs", true, false)
@@ -957,12 +966,16 @@ func _refresh() -> void:
 			if not selected.is_empty() and selected["status"] == "Waiting":
 				if float(selected.get("route_distance_km", 0.0)) > 0.0:
 					var eta_minutes := int(ceil(float(selected.get("route_eta_seconds", 0.0)) / 60.0))
-					order_list.add_child(_label("PARCEL %03d  ·  %.1f km road route  ·  ~%d min" % [selected["id"], float(selected["route_distance_km"]), eta_minutes], 13, "#a8bac8"))
+					order_list.add_child(_label("%s %03d  ·  %.1f km  ·  ~%d min" % [IDMServicePricing.short_label(str(selected.get("service_type", "parcel_logistics"))), selected["id"], float(selected["route_distance_km"]), eta_minutes], 13, "#a8bac8"))
 				else:
-					order_list.add_child(_label("PARCEL %03d" % selected["id"], 13, "#91a8ba"))
-				var payout := _label("RM%d delivery payout" % selected["payout"], 20, "#f1f6fa")
+					order_list.add_child(_label("%s %03d" % [IDMServicePricing.short_label(str(selected.get("service_type", "parcel_logistics"))), selected["id"]], 13, "#91a8ba"))
+				var payout := _label("RM%.2f estimated fare" % float(selected["payout"]), 20, "#f1f6fa")
 				payout.add_theme_font_size_override("font_size", int(round(20.0 * ui_scale)))
 				order_list.add_child(payout)
+				var quote: Dictionary = selected.get("price_quote", {})
+				if not quote.is_empty():
+					order_list.add_child(_label("Base RM%.2f  +  distance RM%.2f  +  time RM%.2f" % [float(quote.get("base_rm", 0.0)), float(quote.get("distance_rm", 0.0)), float(quote.get("time_rm", 0.0))], 10, "#91a8ba"))
+				order_list.add_child(_label("Automatic simulated fare · not an official rate", 10, "#91a8ba"))
 				var dispatch := _button("Dispatch rider", func(): _dispatch(selected["id"]))
 				dispatch.custom_minimum_size.y = 50
 				dispatch.add_theme_color_override("font_color", Color("#04252d"))
@@ -972,7 +985,7 @@ func _refresh() -> void:
 				dispatch.add_theme_stylebox_override("normal", dispatch_style)
 				order_list.add_child(dispatch)
 			elif not selected.is_empty() and str(selected["status"]).begins_with("On route"):
-				order_list.add_child(_label("PARCEL %03d  ·  %s" % [selected["id"], str(selected["status"]).to_upper()], 15, "#f1f6fa"))
+				order_list.add_child(_label("%s %03d  ·  %s" % [IDMServicePricing.short_label(str(selected.get("service_type", "parcel_logistics"))), selected["id"], str(selected["status"]).to_upper()], 15, "#f1f6fa"))
 				var route_rider_id := int(selected.get("rider", -1))
 				var route_sim: IDMRouteSimulation = route_simulations.get(route_rider_id)
 				if route_sim != null and route_sim.is_active():
@@ -986,7 +999,7 @@ func _refresh() -> void:
 					order_list.add_child(_label("The road route is being restored.", 13, "#a8bac8"))
 			else:
 				var waiting_count := _waiting_count()
-				var hint := _label("%d parcels waiting" % waiting_count if waiting_count > 0 else "Tap a parcel pin to review", 16, "#f1f6fa")
+				var hint := _label("%d bookings waiting" % waiting_count if waiting_count > 0 else "Tap a booking pin to review", 16, "#f1f6fa")
 				order_list.add_child(hint)
 				if sheet_expanded:
 					var map_caption := "WORLD VIEW DATA UNAVAILABLE" if world_map else "OSM STREET MAP · KL/SELANGOR CORE" if geographic_map_available and not legacy_map_mode else "FICTIONAL CITY MAP · LEGACY SAVE"
@@ -1141,7 +1154,7 @@ func _draw_map() -> void:
 		var point: Vector2 = map_rect.position + order["destination"] * map_rect.size
 		map_view.draw_circle(point, 21, ThemeService.color("rider_back"))
 		map_view.draw_circle(point, 16, ThemeService.color("accent_fill"))
-		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), "P", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#06202a"))
+		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), IDMServicePricing.marker(str(order.get("service_type", "parcel_logistics"))), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#06202a"))
 	for rider in riders:
 		var position: Vector2 = rider["position"]
 		var route_sim: IDMRouteSimulation = route_simulations.get(int(rider.get("id", -1)))
