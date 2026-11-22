@@ -4,7 +4,7 @@ import sys
 html = Path(sys.argv[1] if len(sys.argv) > 1 else "build/web/index.html").read_text()
 checks = {
     "dark branded loading panel": 'class="idm-loader-card"' in html and "#081722" in html,
-    "cyan original truck symbol": 'class="idm-loader-mark"' in html and "<svg" in html,
+    "loading mark reuses the original app truck icon": 'class="idm-loader-mark" src="./brand/idm-app-icon.svg"' in html,
     "approved loading title and subtitle": "IDLE DELIVERY MANAGER" in html and "Build Your Logistics Empire" in html,
     "creator followed by copyright": html.index("Created by UphyRaop") < html.index("© 2026 UR Trade Network. All rights reserved."),
     "no separate loading publisher line": "idm-loader-company" not in html,
