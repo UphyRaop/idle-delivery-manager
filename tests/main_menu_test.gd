@@ -26,7 +26,12 @@ func _run() -> void:
 	var speed_buttons: Dictionary = game.get("speed_buttons")
 	_check(speed_buttons.keys().size() == 5 and speed_buttons.has(1) and speed_buttons.has(5) and speed_buttons.has(10) and speed_buttons.has(50) and speed_buttons.has(100) and not speed_buttons.has(2), "speed selector exposes exactly 1x, 5x, 10x, 50x and 100x")
 	var labels := _all_text(menu)
-	_check(labels.has("IDLE DELIVERY MANAGER"), "main menu uses the approved game title")
+	if Vector2(game.get("viewport_size")).x < 600.0:
+		var brand_icon := menu.find_child("IDMBrandIcon", true, false) as TextureRect
+		_check(is_instance_valid(brand_icon) and brand_icon.texture != null and labels.has("IDLE DELIVERY MANAGER") and labels.has("Build Your Logistics Empire"), "phone menu keeps the official truck icon and readable branding")
+	else:
+		var logo := menu.find_child("IDMFullLogo", true, false) as TextureRect
+		_check(is_instance_valid(logo) and logo.texture != null and logo.tooltip_text.contains("IDLE DELIVERY MANAGER"), "wider main menu uses the approved full vector brand logo")
 	_check(labels.has("Created by UphyRaop"), "main menu shows the approved creator credit")
 	_check(labels.has("© 2026 UR Trade Network. All rights reserved."), "main menu shows the required copyright")
 	_check(not labels.has("UR Trade Network"), "main menu does not add a duplicate publisher line above the creator credit")

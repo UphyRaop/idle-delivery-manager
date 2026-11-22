@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Idle Delivery Manager app icon</title>
+  <rect width="512" height="512" rx="112" fill="#113B48"/>
+  <g fill="none" stroke="#55D9E8" stroke-width="25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M96 170h207v185H96z"/>
+    <path d="M303 222h71l54 70v63H303z"/>
+    <path d="M330 247v51h75"/>
+    <path d="M119 355h285"/>
+  </g>
+  <g fill="#55D9E8" stroke="#113B48" stroke-width="12">
+    <circle cx="165" cy="362" r="39"/>
+    <circle cx="359" cy="362" r="39"/>
+  </g>
+  <g fill="#113B48">
+    <circle cx="165" cy="362" r="12"/>
+    <circle cx="359" cy="362" r="12"/>
+  </g>
+</svg>

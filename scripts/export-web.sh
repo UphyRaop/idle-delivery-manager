@@ -28,10 +28,38 @@ done
 
 cp CNAME "$staging/CNAME"
 cp favicon.svg "$staging/favicon.svg"
+cp manifest.webmanifest "$staging/manifest.webmanifest"
+mkdir -p "$staging/brand/icons"
+cp assets/branding/idm-logo.svg assets/branding/idm-app-icon.svg "$staging/brand/"
+cp assets/branding/icons/* "$staging/brand/icons/"
 mkdir -p "$staging/vendor"
 cp web/vendor/maplibre-gl.js web/vendor/maplibre-gl.css web/vendor/MAPLIBRE-LICENSE.txt "$staging/vendor/"
 cp web/map_overlay_layers.js web/maplibre_bridge.js web/maplibre_bridge.css "$staging/"
-sed -i 's#<head>#<head><link rel="icon" type="image/svg+xml" href="./favicon.svg">#' "$staging/index.html"
+python3 - "$staging/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+html_path = Path(sys.argv[1])
+html = html_path.read_text()
+html = html.replace(
+    '<head>',
+    '<head>'
+    '<link rel="icon" type="image/svg+xml" href="./favicon.svg">'
+    '<link rel="icon" type="image/png" sizes="32x32" href="./brand/icons/idm-icon-32.png">'
+    '<link rel="icon" type="image/png" sizes="16x16" href="./brand/icons/idm-icon-16.png">'
+    '<link rel="shortcut icon" href="./brand/icons/favicon.ico">'
+    '<link rel="apple-touch-icon" sizes="180x180" href="./brand/icons/idm-icon-180.png">'
+    '<link rel="manifest" href="./manifest.webmanifest">'
+    '<meta name="theme-color" content="#113B48">'
+    '<meta name="apple-mobile-web-app-capable" content="yes">'
+    '<meta name="apple-mobile-web-app-title" content="IDM">'
+    '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">',
+    1,
+)
+if 'rel="manifest" href="./manifest.webmanifest"' not in html:
+    raise SystemExit('Failed to add PWA and touch icon metadata.')
+html_path.write_text(html)
+PY
 grep -q 'href="./favicon.svg"' "$staging/index.html"
 python3 - "$staging/index.html" <<'PY'
 from pathlib import Path
@@ -111,7 +139,7 @@ loader_css = '''
 }
 #status-splash { display: none !important; }
 .idm-loader-card { width: min(100%, 390px); box-sizing: border-box; padding: clamp(24px, 7vw, 38px); border: 1px solid #234253; border-radius: 24px; background: rgba(14, 34, 47, .96); box-shadow: 0 22px 70px rgba(0, 0, 0, .3); text-align: center; }
-.idm-loader-mark { display: grid; width: 58px; height: 58px; margin: 0 auto 20px; place-items: center; border: 1px solid #28798a; border-radius: 18px; background: #113b48; color: #55d9e8; }
+.idm-loader-mark { display: block; width: 58px; height: 58px; margin: 0 auto 20px; border: 1px solid #28798a; border-radius: 18px; background: #113b48; object-fit: cover; }
 .idm-loader-title { margin: 0; font-size: clamp(18px, 5vw, 22px); line-height: 1.25; letter-spacing: .045em; font-weight: 750; }
 .idm-loader-subtitle { margin: 10px 0 0; color: #55d9e8; font-size: 14px; }
 .idm-loader-creator { margin: 25px 0 0; color: #b1c3cd; font-size: 12px; }
@@ -166,9 +194,7 @@ default_status = '''\t\t<div id="status">
 \t\t</div>'''
 branded_status = '''\t\t<div id="status" data-progress-mode="indeterminate" data-status-mode="progress" role="status" aria-live="polite">
 \t\t\t<section class="idm-loader-card" aria-label="IDLE DELIVERY MANAGER loading">
-\t\t\t\t<div class="idm-loader-mark" aria-hidden="true">
-\t\t\t\t\t<svg width="34" height="34" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 10h17v14H4zM21 15h6l4 5v4H21zM24 17v3h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="10" cy="25" r="2.5" fill="currentColor"/><circle cx="26" cy="25" r="2.5" fill="currentColor"/></svg>
-\t\t\t\t</div>
+\t\t\t\t<img class="idm-loader-mark" src="./brand/idm-app-icon.svg" width="58" height="58" alt="" aria-hidden="true">
 \t\t\t\t<h1 class="idm-loader-title">IDLE DELIVERY MANAGER</h1>
 \t\t\t\t<p class="idm-loader-subtitle">Build Your Logistics Empire</p>
 \t\t\t\t<div class="idm-progress-track" aria-hidden="true"><div class="idm-progress-fill" id="idm-progress-fill"></div></div>

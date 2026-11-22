@@ -60,6 +60,9 @@ jobs:
       - name: Verify branded loading shell
         run: python3 tests/loading_shell_test.py build/web/index.html
 
+      - name: Verify brand icons and web metadata
+        run: python3 tests/branding_assets_test.py build/web
+
       - name: Upload exported game
         uses: actions/upload-pages-artifact@v4
         with:
