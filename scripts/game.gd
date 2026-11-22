@@ -75,6 +75,21 @@ var world_map := false
 var viewport_size := Vector2(390, 844)
 var safe_insets := Vector4(8, 8, 8, 16)
 var ui_scale := 1.0
+var maplibre_initialized := false
+var browser_map_state: Dictionary = {}
+var pending_map_camera: Dictionary = {}
+var last_city_camera: Dictionary = {}
+var follow_update_elapsed := 0.0
+var map_camera_sync_elapsed := 0.0
+var safe_area_refresh_elapsed := 0.0
+var browser_block_rects_dirty := false
+var browser_block_rects: Array[Dictionary] = []
+var pending_tap := false
+var pending_tap_generation := 0
+var pending_tap_point := Vector2.ZERO
+
+const DEFAULT_CITY_CENTER := Vector2(101.69, 3.14)
+const DEFAULT_CITY_ZOOM := 10.7
 
 func _ready() -> void:
 	geographic_map_available = geographic_service.load_data()
@@ -88,6 +103,7 @@ func _ready() -> void:
 	_build_ui()
 	ThemeService.theme_changed.connect(_on_theme_changed)
 	get_viewport().size_changed.connect(_layout_ui)
+	safe_insets = _query_safe_insets()
 	_layout_ui()
 	_refresh()
 	if save_recovery_required:
@@ -189,6 +205,9 @@ func _set_active_save_path(path: String) -> void:
 func _process(delta: float) -> void:
 	if save_recovery_required:
 		return
+	_update_safe_area(delta)
+	_update_browser_map(delta)
+	_flush_map_input_blockers()
 	if not paused:
 		elapsed += delta * speed
 		if elapsed >= ORDER_INTERVAL:
@@ -225,6 +244,12 @@ func _process(delta: float) -> void:
 		if followed_rider.is_empty():
 			map_camera.follow_enabled = false
 			followed_rider_id = -1
+		elif _maplibre_active():
+			follow_update_elapsed += delta
+			if follow_update_elapsed >= 0.25:
+				follow_update_elapsed = 0.0
+				var geo := geographic_service.uv_to_geo(followed_rider["position"])
+				_maplibre_call("window.IDMMap.setFollowTarget(%s, %s)" % [JSON.stringify(geo.x), JSON.stringify(geo.y)])
 		else:
 			map_camera.update_follow(delta, followed_rider["position"], _map_content_rect(map_view.size), map_view.size)
 	if not paused:
@@ -260,11 +285,11 @@ func _build_ui() -> void:
 	activity.custom_minimum_size.x = 70
 	top_row.add_child(activity)
 	active_jobs_label = Label.new()
-	active_jobs_label.add_theme_font_size_override("font_size", 10)
+	active_jobs_label.add_theme_font_size_override("font_size", 12)
 	active_jobs_label.add_theme_color_override("font_color", ThemeService.color("text"))
 	activity.add_child(active_jobs_label)
 	pending_jobs_label = Label.new()
-	pending_jobs_label.add_theme_font_size_override("font_size", 10)
+	pending_jobs_label.add_theme_font_size_override("font_size", 11)
 	pending_jobs_label.add_theme_color_override("font_color", ThemeService.color("muted"))
 	activity.add_child(pending_jobs_label)
 	var balance := VBoxContainer.new()
@@ -279,7 +304,7 @@ func _build_ui() -> void:
 	var balance_caption := Label.new()
 	balance_caption.text = "AVAILABLE"
 	balance_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	balance_caption.add_theme_font_size_override("font_size", 9)
+	balance_caption.add_theme_font_size_override("font_size", 10)
 	balance_caption.add_theme_color_override("font_color", Color("#91a8ba"))
 	balance.add_child(balance_caption)
 
@@ -291,12 +316,12 @@ func _build_ui() -> void:
 	sim_row.add_theme_constant_override("separation", 4)
 	sim_controls.add_child(sim_row)
 	pause_button = _button("Pause", _toggle_pause)
-	pause_button.custom_minimum_size = Vector2(70, 46)
+	pause_button.custom_minimum_size = Vector2(74, 52)
 	sim_row.add_child(pause_button)
 	for multiplier in [1, 2, 5, 10]:
 		var factor: int = multiplier
 		var speed_button := _button(str(factor) + "×", func(): _set_speed(factor))
-		speed_button.custom_minimum_size = Vector2(46, 46)
+		speed_button.custom_minimum_size = Vector2(50, 52)
 		speed_button.add_theme_font_size_override("font_size", 14)
 		speed_buttons[factor] = speed_button
 		sim_row.add_child(speed_button)
@@ -309,8 +334,12 @@ func _build_ui() -> void:
 	var zoom_in := _button("+", func(): _zoom_map(1.25))
 	var zoom_out := _button("−", func(): _zoom_map(0.8))
 	var recenter := _button("Center", _recenter_map)
-	for control in [zoom_in, zoom_out, recenter]:
-		control.custom_minimum_size = Vector2(72, 46)
+	for control in [zoom_in, zoom_out]:
+		control.custom_minimum_size = Vector2(62, 58)
+		control.add_theme_font_size_override("font_size", 22)
+		map_controls.add_child(control)
+	recenter.custom_minimum_size = Vector2(72, 54)
+	for control in [recenter]:
 		control.add_theme_font_size_override("font_size", 14)
 		map_controls.add_child(control)
 
@@ -401,8 +430,6 @@ func _layout_ui() -> void:
 	var previous_viewport := viewport_size
 	var previous_map_rect := _map_content_rect(previous_viewport)
 	var window := get_window()
-	if window.size.x > 0 and window.size.y > 0:
-		window.content_scale_size = window.size
 	viewport_size = Vector2(window.size)
 	if viewport_size.x <= 0 or viewport_size.y <= 0:
 		viewport_size = get_viewport_rect().size
@@ -501,8 +528,12 @@ func _layout_ui() -> void:
 		var selected_button: bool = tab == selected_tab
 		nav_button.modulate = Color("#3bd5e8") if selected_button else Color("#dbe7ef")
 	map_view.queue_redraw()
+	_sync_map_input_blockers()
 
 func _read_safe_insets() -> Vector4:
+	return safe_insets
+
+func _query_safe_insets() -> Vector4:
 	var insets := Vector4(8, 8, 8, 16)
 	if Engine.has_singleton("JavaScriptBridge"):
 		var bridge: Object = Engine.get_singleton("JavaScriptBridge")
@@ -512,6 +543,136 @@ func _read_safe_insets() -> Vector4:
 			insets.z = maxf(insets.z, _safe_value(bridge, "right"))
 			insets.w = maxf(insets.w, _safe_value(bridge, "bottom"))
 	return insets
+
+func _update_safe_area(delta: float) -> void:
+	if not Engine.has_singleton("JavaScriptBridge"):
+		return
+	safe_area_refresh_elapsed += delta
+	if safe_area_refresh_elapsed < 0.5:
+		return
+	safe_area_refresh_elapsed = 0.0
+	var queried := _query_safe_insets()
+	if queried != safe_insets:
+		safe_insets = queried
+		call_deferred("_layout_ui")
+
+func _maplibre_call(expression: String) -> Variant:
+	if not Engine.has_singleton("JavaScriptBridge"):
+		return null
+	var bridge: Object = Engine.get_singleton("JavaScriptBridge")
+	if bridge == null:
+		return null
+	return bridge.call("eval", expression, true)
+
+func _maplibre_ready() -> bool:
+	return _javascript_truth(_maplibre_call("Boolean(window.IDMMap && window.IDMMap.isReady())"))
+
+func _javascript_truth(value: Variant) -> bool:
+	if typeof(value) == TYPE_BOOL:
+		return value
+	return str(value).to_lower() in ["true", "1"]
+
+func _maplibre_active() -> bool:
+	return geographic_map_available and not legacy_map_mode and maplibre_initialized
+
+func _browser_camera_snapshot() -> Dictionary:
+	var raw: Variant = _maplibre_call("window.IDMMap ? JSON.stringify(window.IDMMap.getCamera()) : ''")
+	if not raw is String or raw.is_empty():
+		return {}
+	var parsed := JSON.new()
+	if parsed.parse(raw) != OK or typeof(parsed.data) != TYPE_DICTIONARY:
+		return {}
+	return parsed.data
+
+func _update_browser_map(delta: float) -> void:
+	if not Engine.has_singleton("JavaScriptBridge"):
+		return
+	var ready := _maplibre_ready()
+	if not ready:
+		return
+	if not maplibre_initialized:
+		_maplibre_call("window.IDMMap.setTheme(%s)" % JSON.stringify(ThemeService.mode))
+		if geographic_map_available and not legacy_map_mode:
+			var center := [DEFAULT_CITY_CENTER.x, DEFAULT_CITY_CENTER.y]
+			var target_zoom := DEFAULT_CITY_ZOOM
+			if pending_map_camera.has("center") and pending_map_camera["center"] is Array and pending_map_camera["center"].size() >= 2:
+				center = pending_map_camera["center"]
+				target_zoom = float(pending_map_camera.get("zoom", DEFAULT_CITY_ZOOM))
+			elif not last_city_camera.is_empty():
+				center = last_city_camera.get("center", center)
+				target_zoom = float(last_city_camera.get("zoom", target_zoom))
+			_maplibre_call("window.IDMMap.setVisible(true)")
+			_maplibre_call("window.IDMMap.setView(%s, %s, 0)" % [JSON.stringify(center), JSON.stringify(target_zoom)])
+		else:
+			_maplibre_call("window.IDMMap.setVisible(false)")
+		maplibre_initialized = true
+		pending_map_camera.clear()
+	if not geographic_map_available or legacy_map_mode:
+		_maplibre_call("window.IDMMap.setVisible(false)")
+		return
+	_maplibre_call("window.IDMMap.setVisible(true)")
+	map_camera_sync_elapsed += delta
+	if map_camera_sync_elapsed < 0.10 and not map_camera.follow_enabled:
+		return
+	map_camera_sync_elapsed = 0.0
+	if map_camera.follow_enabled and followed_rider_id >= 0:
+		var camera := _browser_camera_snapshot()
+		if not camera.is_empty():
+			browser_map_state = camera
+			map_camera.follow_enabled = _javascript_truth(_maplibre_call("Boolean(window.IDMMap.isFollowing())"))
+			if not map_camera.follow_enabled:
+				followed_rider_id = -1
+	else:
+		browser_map_state = _browser_camera_snapshot()
+		if not browser_map_state.is_empty():
+			last_city_camera = browser_map_state.duplicate(true)
+	map_view.queue_redraw()
+
+func _screen_for_uv(uv: Vector2) -> Vector2:
+	if not _maplibre_active() or browser_map_state.is_empty():
+		return map_camera.world_to_screen(uv, _map_content_rect(map_view.size))
+	var geo := geographic_service.uv_to_geo(uv)
+	return _screen_for_geo(geo)
+
+func _screen_for_geo(lon_lat: Vector2) -> Vector2:
+	if browser_map_state.is_empty():
+		return map_view.size * 0.5
+	var center: Array = browser_map_state.get("center", [DEFAULT_CITY_CENTER.x, DEFAULT_CITY_CENTER.y])
+	if center.size() < 2:
+		return map_view.size * 0.5
+	var zoom := float(browser_map_state.get("zoom", DEFAULT_CITY_ZOOM))
+	var world_size := 512.0 * pow(2.0, zoom)
+	var point_world := Vector2(_mercator_x(lon_lat.x), _mercator_y(lon_lat.y)) * world_size
+	var center_world := Vector2(_mercator_x(float(center[0])), _mercator_y(float(center[1]))) * world_size
+	var delta := point_world - center_world
+	if delta.x > world_size * 0.5:
+		delta.x -= world_size
+	elif delta.x < -world_size * 0.5:
+		delta.x += world_size
+	return map_view.size * 0.5 + delta
+
+func _mercator_x(lon: float) -> float:
+	return (lon + 180.0) / 360.0
+
+func _mercator_y(lat: float) -> float:
+	var bounded := clampf(lat, -85.051129, 85.051129)
+	var radians := deg_to_rad(bounded)
+	return (1.0 - log(tan(radians) + 1.0 / cos(radians)) / PI) * 0.5
+
+func _sync_map_input_blockers() -> void:
+	browser_block_rects.clear()
+	for node in get_children():
+		if node is Control and node != map_view and node.visible:
+			var rect: Rect2 = node.get_global_rect()
+			if rect.size.x > 0.0 and rect.size.y > 0.0:
+				browser_block_rects.append({"x": rect.position.x, "y": rect.position.y, "width": rect.size.x, "height": rect.size.y})
+	browser_block_rects_dirty = true
+
+func _flush_map_input_blockers() -> void:
+	if not browser_block_rects_dirty or not Engine.has_singleton("JavaScriptBridge"):
+		return
+	_maplibre_call("window.IDMMap && window.IDMMap.setBlockRects(%s)" % JSON.stringify(browser_block_rects))
+	browser_block_rects_dirty = false
 
 func _safe_value(bridge: Object, side: String) -> float:
 	var value: Variant = bridge.call("eval", "parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--idm-safe-" + side + "')) || 0", true)
@@ -532,6 +693,10 @@ func _sheet_title() -> String:
 func _zoom_map(factor: float, screen_point: Vector2 = Vector2(-1.0, -1.0)) -> void:
 	if not is_instance_valid(map_view):
 		return
+	if _maplibre_active():
+		var anchor := map_view.size * 0.5 if screen_point.x < 0.0 or screen_point.y < 0.0 else screen_point
+		_maplibre_call("window.IDMMap.zoomBy(%s, [%s, %s], 200)" % [JSON.stringify(factor), JSON.stringify(anchor.x), JSON.stringify(anchor.y)])
+		return
 	var anchor := map_view.size * 0.5 if screen_point.x < 0.0 or screen_point.y < 0.0 else screen_point
 	map_camera.zoom_at(factor, anchor, map_view.size)
 	map_view.queue_redraw()
@@ -540,14 +705,27 @@ func _clamp_map_pan() -> void:
 	map_camera.clamp_pan(map_view.size)
 
 func _recenter_map() -> void:
+	if _maplibre_active():
+		_maplibre_call("window.IDMMap.setView(%s, %s, 350)" % [JSON.stringify([DEFAULT_CITY_CENTER.x, DEFAULT_CITY_CENTER.y]), JSON.stringify(DEFAULT_CITY_ZOOM)])
+		map_camera.follow_enabled = false
+		followed_rider_id = -1
+		return
 	map_camera.recenter()
 	followed_rider_id = -1
 	map_view.queue_redraw()
+
+func _restore_city_camera() -> void:
+	if _maplibre_active() and not last_city_camera.is_empty():
+		var center: Array = last_city_camera.get("center", [DEFAULT_CITY_CENTER.x, DEFAULT_CITY_CENTER.y])
+		_maplibre_call("window.IDMMap.setView(%s, %s, 450)" % [JSON.stringify(center), JSON.stringify(last_city_camera.get("zoom", DEFAULT_CITY_ZOOM))])
+	else:
+		_recenter_map()
 
 func _toggle_follow(rider_id: int) -> void:
 	if followed_rider_id == rider_id and map_camera.follow_enabled:
 		map_camera.follow_enabled = false
 		followed_rider_id = -1
+		_maplibre_call("window.IDMMap.stopFollow()")
 		status_label.text = "Follow camera off"
 		_refresh()
 		return
@@ -556,6 +734,9 @@ func _toggle_follow(rider_id: int) -> void:
 		return
 	followed_rider_id = rider_id
 	map_camera.set_follow(true, rider["position"], _map_content_rect(map_view.size), map_view.size)
+	if _maplibre_active():
+		var geo := geographic_service.uv_to_geo(rider["position"])
+		_maplibre_call("window.IDMMap.setFollowTarget(%s, %s)" % [JSON.stringify(geo.x), JSON.stringify(geo.y)])
 	status_label.text = "Following partner %02d · pan map to stop" % rider_id
 	map_view.queue_redraw()
 	_refresh()
@@ -572,6 +753,11 @@ func _toggle_world() -> void:
 	map_mode = selected_subtab
 	map_camera.zoom = 0.7 if world_map else 1.0
 	map_camera.pan = Vector2.ZERO
+	if _maplibre_active():
+		if world_map:
+			_maplibre_call("window.IDMMap.setView([102, 20], 2.5, 500)")
+		else:
+			_restore_city_camera()
 	map_camera.follow_enabled = false
 	followed_rider_id = -1
 	status_label.text = "World overview" if world_map else "City map"
@@ -585,6 +771,11 @@ func _set_subtab(name: String) -> void:
 		world_map = name == "World"
 		map_camera.zoom = 0.7 if world_map else 1.0
 		map_camera.pan = Vector2.ZERO
+		if _maplibre_active():
+			if world_map:
+				_maplibre_call("window.IDMMap.setView([102, 20], 2.5, 500)")
+			else:
+				_restore_city_camera()
 		map_camera.follow_enabled = false
 		followed_rider_id = -1
 		map_view.queue_redraw()
@@ -608,6 +799,47 @@ func _toggle_sheet() -> void:
 	_layout_ui()
 
 func _on_map_input(event: InputEvent) -> void:
+	if _maplibre_active():
+		if event is InputEventScreenTouch:
+			if event.pressed:
+				touch_points[event.index] = event.position
+				if touch_points.size() == 1:
+					gesture_start = event.position
+					suppress_tap = false
+				else:
+					suppress_tap = true
+					_stop_follow_for_manual_gesture()
+			else:
+				touch_points.erase(event.index)
+				if touch_points.is_empty() and not suppress_tap and event.position.distance_to(gesture_start) < 12.0:
+					_queue_map_tap(event.position)
+				if touch_points.is_empty():
+					suppress_tap = false
+			if event.pressed and event.position.distance_to(gesture_start) > 12.0:
+				suppress_tap = true
+				_stop_follow_for_manual_gesture()
+		elif event is InputEventScreenDrag:
+			if event.position.distance_to(gesture_start) > 12.0:
+				suppress_tap = true
+				_stop_follow_for_manual_gesture()
+		elif event is InputEventMouseButton:
+			if event.button_index == MOUSE_BUTTON_LEFT and event.pressed and event.double_click:
+				pending_tap = false
+				pending_tap_generation += 1
+				last_tap_msec = 0
+				suppress_tap = true # Browser native dblclick is forwarded by the JS bridge.
+			elif event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+				gesture_start = event.position
+				suppress_tap = false
+			elif event.button_index == MOUSE_BUTTON_LEFT and not event.pressed and not suppress_tap and event.position.distance_to(gesture_start) < 12.0:
+				_queue_map_tap(event.position)
+			elif event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed:
+				_stop_follow_for_manual_gesture()
+		elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			if event.position.distance_to(gesture_start) > 12.0:
+				suppress_tap = true
+				_stop_follow_for_manual_gesture()
+		return
 	if event is InputEventScreenTouch:
 		if event.pressed:
 			touch_points[event.index] = event.position
@@ -657,6 +889,42 @@ func _on_map_input(event: InputEvent) -> void:
 			map_camera.pan = gesture_pan + event.position - gesture_start
 			_clamp_map_pan()
 			map_view.queue_redraw()
+
+func _queue_map_tap(point: Vector2) -> void:
+	var now := Time.get_ticks_msec()
+	if now - last_tap_msec < 320:
+		pending_tap = false
+		pending_tap_generation += 1
+		last_tap_msec = 0
+		_maplibre_call("window.IDMMap.zoomBy(1.5, [%s, %s], 200)" % [JSON.stringify(point.x), JSON.stringify(point.y)])
+		return
+	last_tap_msec = now
+	pending_tap = true
+	pending_tap_point = point
+	pending_tap_generation += 1
+	var generation := pending_tap_generation
+	get_tree().create_timer(0.32).timeout.connect(func():
+		if pending_tap and generation == pending_tap_generation:
+			pending_tap = false
+			_select_marker(point)
+	)
+
+func _forward_map_input(event: InputEvent) -> void:
+	var payload: Dictionary = {}
+	if event is InputEventScreenTouch:
+		payload = {"type": "screen_touch", "pressed": event.pressed, "index": event.index, "positionX": event.position.x, "positionY": event.position.y, "pointerType": "touch"}
+	elif event is InputEventScreenDrag:
+		payload = {"type": "screen_drag", "index": event.index, "positionX": event.position.x, "positionY": event.position.y, "pointerType": "touch"}
+	elif event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			payload = {"type": "wheel", "clientX": event.position.x, "clientY": event.position.y, "deltaY": -120.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 120.0}
+		elif event.button_index == MOUSE_BUTTON_LEFT:
+			payload = {"type": "pointerdown" if event.pressed else "pointerup", "pointerId": 1, "pointerType": "mouse", "clientX": event.position.x, "clientY": event.position.y, "button": 0, "buttons": 1 if event.pressed else 0}
+	elif event is InputEventMouseMotion:
+		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			payload = {"type": "pointermove", "pointerId": 1, "pointerType": "mouse", "clientX": event.position.x, "clientY": event.position.y, "button": 0, "buttons": 1}
+	if not payload.is_empty():
+		_maplibre_call("window.IDMMap.forwardPointerEvent(%s)" % JSON.stringify(payload))
 	elif event is InputEventMagnifyGesture:
 		_zoom_map(event.factor, event.position)
 	elif event is InputEventMouseButton:
@@ -690,8 +958,7 @@ func _select_marker(point: Vector2) -> void:
 	var map_rect := _map_content_rect(map_view.size)
 	for order in orders:
 		if order["status"] == "Waiting":
-			var destination: Vector2 = map_rect.position + order["destination"] * map_rect.size
-			var screen_destination := map_camera.world_to_screen(order["destination"], map_rect)
+			var screen_destination := _screen_for_uv(order["destination"])
 			if point.distance_to(screen_destination) < 30:
 				selected_order = order["id"]
 				sheet_expanded = true
@@ -727,6 +994,7 @@ func _button(label: String, callback: Callable) -> Button:
 
 func _on_theme_changed(_mode: String) -> void:
 	_load_map_texture()
+	_maplibre_call("window.IDMMap && window.IDMMap.setTheme(%s)" % JSON.stringify(ThemeService.mode))
 	_apply_theme_to_ui()
 	if is_instance_valid(map_view):
 		map_view.queue_redraw()
@@ -1006,6 +1274,16 @@ func _find_order(order_id: int) -> Dictionary:
 			return order
 	return {}
 
+func _fit_selected_route(simulation: IDMRouteSimulation) -> void:
+	if not _maplibre_active() or simulation == null or not simulation.is_active():
+		return
+	var points: Array = []
+	var route: Dictionary = simulation.pickup_route if simulation.phase == IDMRouteSimulation.PHASE_PICKUP else simulation.dropoff_route
+	for uv_value in route.get("points", []):
+		var geo := geographic_service.uv_to_geo(Vector2(uv_value))
+		points.append([geo.x, geo.y])
+	_maplibre_call("window.IDMMap.fitRoute(%s, 500)" % JSON.stringify(points))
+
 func _refresh() -> void:
 	if not is_instance_valid(order_list):
 		return
@@ -1068,6 +1346,9 @@ func _refresh() -> void:
 					var follow_button := _button("Stop following" if map_camera.follow_enabled and followed_rider_id == route_rider_id else "Follow partner", func(): _toggle_follow(route_rider_id))
 					follow_button.custom_minimum_size.y = 42
 					order_list.add_child(follow_button)
+					var fit_button := _button("Fit route", func(): _fit_selected_route(route_sim))
+					fit_button.custom_minimum_size.y = 42
+					order_list.add_child(fit_button)
 				else:
 					order_list.add_child(_label("The road route is being restored.", 13, "#a8bac8"))
 			else:
@@ -1364,10 +1645,12 @@ func _draw_map() -> void:
 	var size := rect.size
 	if size.x <= 0 or size.y <= 0:
 		return
-	map_view.draw_rect(Rect2(Vector2.ZERO, size), ThemeService.color("map_background"))
-	map_view.draw_set_transform(map_camera.pan, 0.0, Vector2(map_camera.zoom, map_camera.zoom))
+	var browser_active := _maplibre_active()
 	var map_rect := _map_content_rect(size)
-	if geographic_map_available and not legacy_map_mode and is_instance_valid(map_texture):
+	if not browser_active:
+		map_view.draw_rect(Rect2(Vector2.ZERO, size), ThemeService.color("map_background"))
+		map_view.draw_set_transform(map_camera.pan, 0.0, Vector2(map_camera.zoom, map_camera.zoom))
+	if geographic_map_available and not legacy_map_mode and not browser_active and is_instance_valid(map_texture):
 		map_view.draw_texture_rect(map_texture, map_rect, false)
 		var major_places := ["Kuala Lumpur", "Petaling Jaya", "Shah Alam", "Subang Jaya", "Klang", "Kajang", "Ampang Jaya", "Puchong"]
 		var drawn_label_rects: Array[Rect2] = []
@@ -1401,31 +1684,36 @@ func _draw_map() -> void:
 		if world_map:
 			map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.5 - 105, size.y * 0.24), "World map coverage is not available in this build.", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ThemeService.color("text"))
 	else:
-		_draw_fictional_map_background(size)
+		if not browser_active:
+			_draw_fictional_map_background(size)
 	var selected_route_order := _find_order(selected_order)
 	var selected_sim: IDMRouteSimulation = route_simulations.get(int(selected_route_order.get("rider", -1))) if not selected_route_order.is_empty() else null
 	if selected_sim != null and selected_sim.is_active():
 		_draw_route_polyline(selected_sim.pickup_route.get("points", []), Color("#ffcf63"), 5.0, map_rect)
 		_draw_route_polyline(selected_sim.dropoff_route.get("points", []), Color("#39d5e8"), 5.0, map_rect)
-		var pickup_point: Vector2 = map_rect.position + selected_sim.pickup_route["points"][-1] * map_rect.size
+		var pickup_point := _screen_for_uv(Vector2(selected_sim.pickup_route["points"][-1])) if browser_active else map_rect.position + Vector2(selected_sim.pickup_route["points"][-1]) * map_rect.size
 		map_view.draw_circle(pickup_point, 11.0, Color("#ffcf63"))
 		map_view.draw_string(ThemeDB.fallback_font, pickup_point + Vector2(-4, 4), "P", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#342307"))
 	for order in orders:
 		if order["status"] == "Delivered":
 			continue
-		var point: Vector2 = map_rect.position + order["destination"] * map_rect.size
-		map_view.draw_circle(point, 21, ThemeService.color("rider_back"))
-		map_view.draw_circle(point, 16, ThemeService.color("accent_fill"))
-		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), IDMServicePricing.marker(str(order.get("service_type", "parcel_logistics"))), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#06202a"))
+		var point := _screen_for_uv(Vector2(order["destination"])) if browser_active else map_rect.position + Vector2(order["destination"]) * map_rect.size
+		if point.x < -28 or point.y < -28 or point.x > size.x + 28 or point.y > size.y + 28:
+			continue
+		map_view.draw_circle(point, 23, ThemeService.color("rider_back"))
+		map_view.draw_circle(point, 18, ThemeService.color("accent_fill"))
+		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-5, 6), IDMServicePricing.marker(str(order.get("service_type", "parcel_logistics"))), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#06202a"))
 	for rider in riders:
 		var position: Vector2 = rider["position"]
 		var route_sim: IDMRouteSimulation = route_simulations.get(int(rider.get("id", -1)))
 		if route_sim != null and route_sim.is_active():
 			position = route_sim.current_uv
-		var point := map_rect.position + position * map_rect.size
-		map_view.draw_circle(point, 17, ThemeService.color("rider_back"))
-		map_view.draw_circle(point, 12, ThemeService.color("rider"))
-		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), "R", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#06202a"))
+		var point := _screen_for_uv(position) if browser_active else map_rect.position + position * map_rect.size
+		if point.x < -28 or point.y < -28 or point.x > size.x + 28 or point.y > size.y + 28:
+			continue
+		map_view.draw_circle(point, 20, ThemeService.color("rider_back"))
+		map_view.draw_circle(point, 15, ThemeService.color("rider"))
+		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-5, 5), "R", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#06202a"))
 	map_view.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _draw_route_polyline(route_points: Array, color: Color, width: float, map_rect: Rect2) -> void:
@@ -1433,7 +1721,7 @@ func _draw_route_polyline(route_points: Array, color: Color, width: float, map_r
 		return
 	var projected := PackedVector2Array()
 	for point in route_points:
-		projected.append(map_rect.position + Vector2(point) * map_rect.size)
+		projected.append(_screen_for_uv(Vector2(point)) if _maplibre_active() else map_rect.position + Vector2(point) * map_rect.size)
 	map_view.draw_polyline(projected, color, width, true)
 
 func _map_content_rect(size: Vector2) -> Rect2:
@@ -1484,6 +1772,10 @@ func _save_game() -> void:
 		"elapsed": elapsed,
 		"speed": speed,
 	}
+	if _maplibre_active():
+		var camera := _browser_camera_snapshot()
+		if not camera.is_empty():
+			data["map_camera"] = camera
 	var serialized := JSON.stringify(data)
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
@@ -1536,6 +1828,9 @@ func _web_save_mirror() -> Dictionary:
 func _load_game() -> void:
 	selected_order = -1
 	sheet_expanded = false
+	maplibre_initialized = false
+	browser_map_state.clear()
+	pending_map_camera.clear()
 	var data := _web_save_mirror()
 	if data.is_empty():
 		if not FileAccess.file_exists(save_path):
@@ -1556,6 +1851,9 @@ func _load_game() -> void:
 	# Existing normalized saves belong to the old fictional prototype map. Keep
 	# them in that coordinate space until a deliberate, visible migration exists.
 	legacy_map_mode = str(data.get("map_space", "legacy_normalized")) != "kl_selangor_web_mercator_uv"
+	var saved_camera: Variant = data.get("map_camera", {})
+	if not legacy_map_mode and saved_camera is Dictionary and saved_camera.get("center", null) is Array:
+		pending_map_camera = saved_camera.duplicate(true)
 	cash = float(data.get("cash", STARTING_CASH))
 	revenue_total = float(data.get("revenue_total", 0))
 	cost_total = float(data.get("cost_total", 0))
@@ -1642,6 +1940,9 @@ func _new_game() -> void:
 	selected_tab = "Map"
 	selected_subtab = "City"
 	world_map = false
+	maplibre_initialized = false
+	browser_map_state.clear()
+	pending_map_camera.clear()
 	orders.clear()
 	riders.clear()
 	route_simulations.clear()
