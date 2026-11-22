@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "format": "IDMG directed CSR",
+  "source": "OpenStreetMap via Geofabrik",
+  "license": "ODbL-1.0",
+  "bbox_wsen": [
+    101.55,
+    2.98,
+    101.83,
+    3.3
+  ],
+  "nodes": 521431,
+  "directed_arcs": 942095,
+  "oneway_policy": "OSM oneway tags; motorway and roundabout defaults; two-way otherwise",
+  "rejected_ways": {
+    "outside": 12264952,
+    "access": 77617,
+    "unsupported": 2397915
+  },
+  "bytes": 14736077,
+  "encoding": "u32 little-endian raw size + gzip",
+  "bundle_bytes": 6903862
+}
