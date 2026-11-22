@@ -30,7 +30,7 @@ cp CNAME "$staging/CNAME"
 cp favicon.svg "$staging/favicon.svg"
 mkdir -p "$staging/vendor"
 cp web/vendor/maplibre-gl.js web/vendor/maplibre-gl.css web/vendor/MAPLIBRE-LICENSE.txt "$staging/vendor/"
-cp web/maplibre_bridge.js web/maplibre_bridge.css "$staging/"
+cp web/map_overlay_layers.js web/maplibre_bridge.js web/maplibre_bridge.css "$staging/"
 sed -i 's#<head>#<head><link rel="icon" type="image/svg+xml" href="./favicon.svg">#' "$staging/index.html"
 grep -q 'href="./favicon.svg"' "$staging/index.html"
 python3 - "$staging/index.html" <<'PY'
@@ -186,6 +186,7 @@ html = html.replace(default_status, branded_status, 1)
 html = html.replace(
     '<script src="index.js"></script>',
     '<script src="./vendor/maplibre-gl.js"></script>\n'
+    '\t\t<script src="./map_overlay_layers.js"></script>\n'
     '\t\t<script src="./maplibre_bridge.js"></script>\n'
     '\t\t<script src="index.js"></script>',
 )

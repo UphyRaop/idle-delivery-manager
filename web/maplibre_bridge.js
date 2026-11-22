@@ -378,6 +378,7 @@
         element.style.pointerEvents = "none";
         element.style.userSelect = "none";
         element.style.willChange = "transform";
+        element.style.zIndex = "10";
         const marker = new window.maplibregl.Marker({ element: element, anchor: "center" }).setLngLat(rider.coordinates).addTo(map);
         rendered = { marker: marker, element: element, coordinates: null };
         renderedRiderMarkers.set(id, rendered);
@@ -411,6 +412,16 @@
     const before = firstSymbolLayerId();
     if (before) map.addLayer(layer, before);
     else map.addLayer(layer);
+  }
+
+  // Base style labels are MapLibre symbol layers and can be drawn after an
+  // overlay inserted before the first symbol. Keep markers above every
+  // basemap label regardless of provider style ordering or reloads.
+  function placeGameplayMarkersAboveBasemap() {
+    if (!map) return false;
+    if (window.IDMMapLayering) return window.IDMMapLayering.promote(map, [GAME_MARKER_LAYER, GAME_MARKER_LABEL_LAYER]);
+    [GAME_MARKER_LAYER, GAME_MARKER_LABEL_LAYER].forEach(function (id) { if (map.getLayer(id)) map.moveLayer(id); });
+    return true;
   }
 
   function ensureGameplayOverlays() {
@@ -482,6 +493,7 @@
       });
       setSourceDataIfChanged(GAME_ROUTES_SOURCE, gameplayRoutes, "routes");
       setSourceDataIfChanged(GAME_MARKERS_SOURCE, gameplayMarkers, "markers");
+      placeGameplayMarkersAboveBasemap();
       return true;
     } catch (error) {
       emit("idm-map-error", { message: "Could not install gameplay overlays: " + String(error && error.message ? error.message : error) });
@@ -572,12 +584,14 @@
   }
 
   function gameplayOverlayState() {
+    const layers = map && map.getStyle() && Array.isArray(map.getStyle().layers) ? map.getStyle().layers : [];
     return {
       routeCount: gameplayRoutes.features.length,
       markerCount: gameplayMarkers.features.length + gameplayRiders.size,
       dynamicRiderCount: renderedRiderMarkers.size,
       sourcesReady: Boolean(map && map.getSource(GAME_ROUTES_SOURCE) && map.getSource(GAME_MARKERS_SOURCE)),
       layersReady: Boolean(map && map.getLayer(GAME_ROUTE_LAYER) && map.getLayer(GAME_MARKER_LAYER)),
+      markerLayersAboveBasemapLabels: window.IDMMapLayering ? window.IDMMapLayering.areMarkersAboveLabels(layers, GAME_MARKER_LAYER, GAME_MARKER_LABEL_LAYER) : false,
     };
   }
 

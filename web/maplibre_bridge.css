@@ -55,6 +55,11 @@
   pointer-events: none;
 }
 
+/* DOM rider markers sit in MapLibre's overlay pane above the basemap canvas. */
+#idm-map-root .maplibregl-marker.idm-map-rider-marker {
+  z-index: 10 !important;
+}
+
 /* The game owns all input overlays and map controls; no MapLibre widgets. */
 #idm-map-root .maplibregl-ctrl-top-left,
 #idm-map-root .maplibregl-ctrl-top-right,
