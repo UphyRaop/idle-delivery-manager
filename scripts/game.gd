@@ -13,6 +13,11 @@ var save_recovery_required := false
 var recovery_overlay: ColorRect
 var save_overlay: ColorRect
 var new_game_confirmation: ColorRect
+var menu_overlay: ColorRect
+var return_menu_confirmation: ColorRect
+var menu_settings_open := false
+var main_menu_active := true
+var game_session_started := false
 const STARTING_CASH := 500.0
 const STARTING_RIDERS := 3
 const ORDER_INTERVAL := 8.0
@@ -108,7 +113,7 @@ func _ready() -> void:
 	_load_save_catalog()
 	_load_active_save_path()
 	_load_game()
-	if not save_recovery_required:
+	if not save_recovery_required and _save_payload_for_path(save_path).size() > 0:
 		_register_current_save_profile()
 	_build_ui()
 	ThemeService.theme_changed.connect(_on_theme_changed)
@@ -116,12 +121,7 @@ func _ready() -> void:
 	safe_insets = _query_safe_insets()
 	_layout_ui()
 	_refresh()
-	if save_recovery_required:
-		_show_save_recovery()
-	elif orders.is_empty():
-		_spawn_order()
-		_spawn_order()
-		_save_game()
+	_show_main_menu()
 
 func _load_active_save_path() -> void:
 	var stored_path: Variant = _web_storage_get(WEB_SAVE_PATH_KEY)
@@ -216,6 +216,8 @@ func _process(delta: float) -> void:
 	if save_recovery_required:
 		return
 	_update_safe_area(delta)
+	if main_menu_active:
+		return
 	_update_browser_map(delta)
 	_flush_map_input_blockers()
 	if not paused:
@@ -270,6 +272,219 @@ func _process(delta: float) -> void:
 	_sync_geographic_overlays()
 	_refresh_map()
 
+func _show_main_menu() -> void:
+	main_menu_active = true
+	menu_settings_open = false
+	paused = true
+	_close_save_overlay()
+	_close_new_game_confirmation()
+	if is_instance_valid(return_menu_confirmation):
+		return_menu_confirmation.queue_free()
+	return_menu_confirmation = null
+	map_view.visible = false
+	hud.visible = false
+	sim_controls.visible = false
+	map_controls.visible = false
+	sheet.visible = false
+	bottom_nav.visible = false
+	_set_map_dom_visible(false)
+	_render_main_menu()
+
+func _render_main_menu() -> void:
+	if is_instance_valid(menu_overlay):
+		menu_overlay.queue_free()
+	menu_overlay = ColorRect.new()
+	menu_overlay.name = "IDMMainMenu"
+	menu_overlay.color = ThemeService.color("map_background")
+	menu_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	menu_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(menu_overlay)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.offset_left = (safe_insets.x + 18) * ui_layout_scale
+	center.offset_right = -(safe_insets.z + 18) * ui_layout_scale
+	center.offset_top = (safe_insets.y + 16) * ui_layout_scale
+	center.offset_bottom = -(safe_insets.w + 16) * ui_layout_scale
+	menu_overlay.add_child(center)
+	var card := PanelContainer.new()
+	var card_width := minf(390.0 * ui_layout_scale, maxf(0.0, viewport_size.x - (safe_insets.x + safe_insets.z + 36.0) * ui_layout_scale))
+	card.custom_minimum_size = Vector2(card_width, 0)
+	card.add_theme_stylebox_override("panel", _panel_style("#102433", 24))
+	center.add_child(card)
+	var column := VBoxContainer.new()
+	var compact := viewport_size.y <= 440.0
+	column.add_theme_constant_override("separation", int(round((5 if compact else 10) * ui_layout_scale)))
+	card.add_child(column)
+	if menu_settings_open:
+		column.add_child(_label("SETTINGS", 19, "#f1f6fa"))
+		var settings_hint := _label("Change the interface appearance before starting or resuming a company.", 13, "#a8bac8")
+		settings_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		column.add_child(settings_hint)
+		var theme_button := _button("Switch to light theme" if ThemeService.mode == "dark" else "Switch to dark theme", _toggle_menu_theme)
+		theme_button.custom_minimum_size.y = 48
+		column.add_child(theme_button)
+		var back := _button("Back to Main Menu", _back_to_menu_home)
+		back.custom_minimum_size.y = 48
+		_set_button_variant(back, "action")
+		column.add_child(back)
+		return
+	var badge := CenterContainer.new()
+	badge.custom_minimum_size.y = (30 if compact else 48) * ui_layout_scale
+	column.add_child(badge)
+	var mark := Label.new()
+	mark.text = "UR"
+	mark.add_theme_font_size_override("font_size", int(round((19 if compact else 23) * ui_scale)))
+	mark.add_theme_color_override("font_color", Color("#45d9ec"))
+	badge.add_child(mark)
+	var title := _label("IDLE DELIVERY MANAGER", 19 if compact else 22, "#f1f6fa")
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(title)
+	var tagline := _label("Build Your Logistics Empire", 12 if compact else 14, "#45d9ec")
+	tagline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	column.add_child(tagline)
+	column.add_child(_menu_button("New Game", _confirm_new_game, true))
+	var continue_button := _menu_button("Continue", _continue_game, false)
+	var continue_path := _latest_valid_save_path()
+	continue_button.disabled = continue_path.is_empty()
+	continue_button.tooltip_text = "Continue the most recently saved valid game" if not continue_path.is_empty() else "No valid saved game is available"
+	column.add_child(continue_button)
+	column.add_child(_menu_button("Load Game", _show_load_game, false))
+	column.add_child(_menu_button("Settings", _open_menu_settings, false))
+	var spacer := Control.new()
+	spacer.custom_minimum_size.y = 3
+	column.add_child(spacer)
+	var company := _label("UR Trade Network", 12, "#a8bac8")
+	company.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	column.add_child(company)
+	var creator := _label("Created by UphyRaop", 11, "#8199aa")
+	creator.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	column.add_child(creator)
+
+func _menu_button(text: String, callback: Callable, primary: bool) -> Button:
+	var button := _button(text, callback)
+	button.custom_minimum_size = Vector2(0, (44 if viewport_size.y <= 440.0 else 48) * ui_layout_scale)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_set_button_variant(button, "action" if primary else "quiet")
+	return button
+
+func _open_menu_settings() -> void:
+	menu_settings_open = true
+	_render_main_menu()
+
+func _back_to_menu_home() -> void:
+	menu_settings_open = false
+	_render_main_menu()
+
+func _toggle_menu_theme() -> void:
+	_toggle_theme()
+	_render_main_menu()
+
+func _set_map_dom_visible(visible: bool) -> void:
+	if not Engine.has_singleton("JavaScriptBridge"):
+		return
+	var bridge: Object = Engine.get_singleton("JavaScriptBridge")
+	if bridge != null:
+		bridge.call("eval", "(()=>{const e=document.getElementById('idm-map-root');if(e)e.style.visibility=%s;})()" % JSON.stringify("visible" if visible else "hidden"), true)
+
+func _latest_valid_save_path() -> String:
+	var candidates: Array[String] = []
+	for profile in save_profiles:
+		var path := str(profile.get("path", ""))
+		if _is_valid_save_path(path) and path not in candidates:
+			candidates.append(path)
+	if _is_valid_save_path(save_path) and save_path not in candidates:
+		candidates.append(save_path)
+	var best_path := ""
+	var best_timestamp := -1
+	for path in candidates:
+		var payload := _save_payload_for_path(path)
+		if payload.is_empty():
+			continue
+		var timestamp := int(payload.get("saved_at", 0))
+		if timestamp <= 0:
+			for profile in save_profiles:
+				if str(profile.get("path", "")) == path:
+					timestamp = int(profile.get("created_at", 0))
+					break
+		if timestamp >= best_timestamp:
+			best_timestamp = timestamp
+			best_path = path
+	return best_path
+
+func _save_payload_for_path(path: String) -> Dictionary:
+	if not _is_valid_save_path(path):
+		return {}
+	var raw: Variant = _web_storage_get(_save_mirror_key(path))
+	var data: Dictionary = {}
+	if raw is String and not raw.is_empty():
+		var parsed_mirror := JSON.new()
+		if parsed_mirror.parse(raw) == OK and parsed_mirror.data is Dictionary:
+			var envelope: Dictionary = parsed_mirror.data
+			if str(envelope.get("path", "")) == path and envelope.get("data", {}) is Dictionary:
+				data = envelope["data"]
+	if data.is_empty() and path == LEGACY_SAVE_PATH:
+		raw = _web_storage_get(WEB_SAVE_MIRROR_KEY)
+		if raw is String and not raw.is_empty():
+			var parsed_legacy := JSON.new()
+			if parsed_legacy.parse(raw) == OK and parsed_legacy.data is Dictionary:
+				var legacy_envelope: Dictionary = parsed_legacy.data
+				if str(legacy_envelope.get("path", "")) == path and legacy_envelope.get("data", {}) is Dictionary:
+					data = legacy_envelope["data"]
+	if data.is_empty() and FileAccess.file_exists(path):
+		var file := FileAccess.open(path, FileAccess.READ)
+		if file != null:
+			var parsed_file := JSON.new()
+			if parsed_file.parse(file.get_as_text()) == OK and parsed_file.data is Dictionary:
+				data = parsed_file.data
+	if int(data.get("version", 0)) != 1 or not data.get("riders", []) is Array or (data.get("riders", []) as Array).is_empty() or not data.get("orders", []) is Array:
+		return {}
+	return data
+
+func _return_to_main_menu() -> void:
+	if is_instance_valid(return_menu_confirmation):
+		return_menu_confirmation.queue_free()
+	return_menu_confirmation = ColorRect.new()
+	return_menu_confirmation.color = Color(0.008, 0.025, 0.04, 0.84)
+	return_menu_confirmation.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	return_menu_confirmation.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(return_menu_confirmation)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	return_menu_confirmation.add_child(center)
+	var card := PanelContainer.new()
+	card.custom_minimum_size = Vector2(minf(350.0, viewport_size.x - 32.0), 0)
+	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
+	center.add_child(card)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	card.add_child(column)
+	column.add_child(_label("RETURN TO MAIN MENU?", 17, "#f1f6fa"))
+	var hint := _label("Your current progress will be saved before returning. The simulation will pause and can be continued later.", 13, "#a8bac8")
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(hint)
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 8)
+	column.add_child(actions)
+	var cancel := _button("Cancel", func(): return_menu_confirmation.queue_free())
+	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel.custom_minimum_size.y = 48
+	actions.add_child(cancel)
+	var confirm := _button("Save and Return", _confirm_return_to_menu)
+	confirm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	confirm.custom_minimum_size.y = 48
+	_set_button_variant(confirm, "action")
+	actions.add_child(confirm)
+
+func _confirm_return_to_menu() -> void:
+	if game_session_started:
+		_save_game()
+		_register_current_save_profile()
+	if is_instance_valid(return_menu_confirmation):
+		return_menu_confirmation.queue_free()
+	return_menu_confirmation = null
+	_show_main_menu()
+
 func _build_ui() -> void:
 	map_view = Control.new()
 	map_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -286,7 +501,7 @@ func _build_ui() -> void:
 	top_row.add_theme_constant_override("separation", 6)
 	hud.add_child(top_row)
 	brand_label = Label.new()
-	brand_label.text = "IDM"
+	brand_label.text = "UR Trade Network"
 	brand_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	brand_label.add_theme_color_override("font_color", Color("#45d9ec"))
 	brand_label.add_theme_font_size_override("font_size", 19)
@@ -525,7 +740,7 @@ func _layout_ui() -> void:
 	if is_desktop:
 		sheet_height = 276 if sheet_expanded else 116
 	if selected_tab == "Settings" and sheet_expanded and not is_landscape:
-		sheet_height = 316
+		sheet_height = 368
 	if selected_tab == "Map" and sheet_expanded:
 		if selected.is_empty():
 			sheet_height = 220 if not is_landscape else 190
@@ -626,6 +841,8 @@ func _layout_ui() -> void:
 	_sync_map_input_blockers()
 	if viewport_changed:
 		call_deferred("_refresh")
+		if main_menu_active:
+			call_deferred("_render_main_menu")
 
 func _ui_size(value: float) -> float:
 	return value * ui_layout_scale
@@ -1707,6 +1924,9 @@ func _refresh() -> void:
 				theme_button.custom_minimum_size.y = _ui_size(ThemeService.control_height("standard"))
 				order_list.add_child(theme_button)
 			else:
+				var main_menu_button := _button("Main Menu", _return_to_main_menu)
+				main_menu_button.custom_minimum_size.y = _ui_size(ThemeService.control_height("standard"))
+				order_list.add_child(main_menu_button)
 				order_list.add_child(_label("CURRENT SAVE", 11, "#91a8ba"))
 				var profile_label := _label("Legacy map · preserved" if legacy_map_mode else "Geographic map · KL / Selangor", 14, "#f1f6fa")
 				profile_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1772,6 +1992,26 @@ func _toggle_theme() -> void:
 	_refresh()
 
 func _continue_game() -> void:
+	if main_menu_active:
+		var latest_path := _latest_valid_save_path()
+		if latest_path.is_empty():
+			return
+		if latest_path != save_path:
+			_load_save_profile(latest_path)
+			return
+		main_menu_active = false
+	game_session_started = true
+	paused = false
+	_set_map_dom_visible(true)
+	map_view.visible = true
+	hud.visible = true
+	sim_controls.visible = true
+	map_controls.visible = true
+	sheet.visible = true
+	bottom_nav.visible = true
+	if is_instance_valid(menu_overlay):
+		menu_overlay.queue_free()
+	menu_overlay = null
 	_close_save_overlay()
 	selected_tab = "Map"
 	selected_subtab = "City" if not world_map else "World"
@@ -1830,13 +2070,24 @@ func _close_new_game_confirmation() -> void:
 func _start_new_geographic_game() -> void:
 	if not geographic_map_available or not road_network_available:
 		return
-	_save_game()
-	_register_current_save_profile()
+	if game_session_started and _save_payload_for_path(save_path).size() > 0:
+		_save_game()
+		_register_current_save_profile()
 	var session_path := "%s%d_%06d.json" % [SAVE_SESSION_PREFIX, int(Time.get_unix_time_from_system()), randi_range(0, 999999)]
 	while FileAccess.file_exists(session_path) or _web_save_mirror_exists(session_path):
 		session_path = "%s%d_%06d.json" % [SAVE_SESSION_PREFIX, int(Time.get_unix_time_from_system()), randi_range(0, 999999)]
 	save_path = session_path
 	_set_active_save_path(save_path)
+	main_menu_active = false
+	game_session_started = true
+	paused = false
+	_set_map_dom_visible(true)
+	map_view.visible = true
+	hud.visible = true
+	sim_controls.visible = true
+	map_controls.visible = true
+	sheet.visible = true
+	bottom_nav.visible = true
 	selected_tab = "Map"
 	selected_subtab = "City"
 	sheet_expanded = false
@@ -1847,12 +2098,16 @@ func _start_new_geographic_game() -> void:
 	_register_current_save_profile()
 	_close_save_overlay()
 	_close_new_game_confirmation()
+	if is_instance_valid(menu_overlay):
+		menu_overlay.queue_free()
+	menu_overlay = null
 	status_label.text = "New geographic game · real KL / Selangor roads"
 	_refresh()
 
 func _show_load_game() -> void:
-	_save_game()
-	_register_current_save_profile()
+	if game_session_started:
+		_save_game()
+		_register_current_save_profile()
 	_close_save_overlay()
 	save_overlay = ColorRect.new()
 	save_overlay.color = Color(0.008, 0.025, 0.04, 0.84)
@@ -1864,7 +2119,7 @@ func _show_load_game() -> void:
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	save_overlay.add_child(center)
 	var card := PanelContainer.new()
-	card.custom_minimum_size = Vector2(minf(340.0, viewport_size.x - 32.0), minf(520.0, viewport_size.y - 32.0))
+	card.custom_minimum_size = Vector2(minf(340.0, viewport_size.x - 32.0), 0)
 	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
 	center.add_child(card)
 	var column := VBoxContainer.new()
@@ -1876,13 +2131,18 @@ func _show_load_game() -> void:
 	column.add_child(description)
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.custom_minimum_size.y = minf(390.0, viewport_size.y - 180.0)
 	column.add_child(scroll)
 	var profile_list := VBoxContainer.new()
 	profile_list.add_theme_constant_override("separation", 6)
 	scroll.add_child(profile_list)
 	var ordered_profiles := save_profiles.duplicate()
-	ordered_profiles.reverse()
+	ordered_profiles.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var a_payload := _save_payload_for_path(str(a.get("path", "")))
+		var b_payload := _save_payload_for_path(str(b.get("path", "")))
+		var a_time := int(a_payload.get("saved_at", a.get("created_at", 0)))
+		var b_time := int(b_payload.get("saved_at", b.get("created_at", 0)))
+		return a_time > b_time
+	)
 	var visible_count := 0
 	for profile in ordered_profiles:
 		var path := str(profile.get("path", ""))
@@ -1890,15 +2150,18 @@ func _show_load_game() -> void:
 			continue
 		visible_count += 1
 		var is_legacy := str(profile.get("map_space", "legacy_normalized")) != "kl_selangor_web_mercator_uv"
-		var label := ("Legacy save · fictional map\n%s" % ("Current game · preserved" if path == save_path else "Preserved · tap to load")) if is_legacy else ("KL / Selangor · geographic game\n%s" % ("Current game" if path == save_path else "Tap to load"))
+		var valid_profile := not _save_payload_for_path(path).is_empty()
+		var profile_state := "Unavailable · invalid save kept unchanged" if not valid_profile else "Current game · preserved" if path == save_path else "Tap to load"
+		var label := ("Legacy save · fictional map\n%s" % profile_state) if is_legacy else ("KL / Selangor · geographic game\n%s" % profile_state)
 		var target_path := path
 		var load_button := _button(label, func(): _load_save_profile(target_path))
 		load_button.custom_minimum_size.y = 58
-		load_button.disabled = path == save_path
+		load_button.disabled = path == save_path or not valid_profile
 		profile_list.add_child(load_button)
 	if visible_count == 0:
 		profile_list.add_child(_label("No saved games are available yet.", 13, "#a8bac8"))
-	var close_button := _button("Return to Game", _close_save_overlay)
+	scroll.custom_minimum_size.y = minf(minf(390.0, maxf(54.0, float(visible_count) * 64.0)), maxf(54.0, viewport_size.y - 210.0))
+	var close_button := _button("Back to Main Menu" if main_menu_active else "Return to Game", _close_save_overlay)
 	close_button.custom_minimum_size.y = 46
 	column.add_child(close_button)
 
@@ -1920,8 +2183,9 @@ func _load_save_profile(path: String) -> void:
 		status_label.text = "That saved game could not be found. Your current game remains active."
 		return
 	var previous_path := save_path
-	_save_game()
-	_register_current_save_profile()
+	if game_session_started:
+		_save_game()
+		_register_current_save_profile()
 	save_path = path
 	_set_active_save_path(path)
 	save_recovery_required = false
@@ -1937,6 +2201,19 @@ func _load_save_profile(path: String) -> void:
 		_refresh()
 		return
 	_register_current_save_profile()
+	main_menu_active = false
+	game_session_started = true
+	paused = false
+	_set_map_dom_visible(true)
+	map_view.visible = true
+	hud.visible = true
+	sim_controls.visible = true
+	map_controls.visible = true
+	sheet.visible = true
+	bottom_nav.visible = true
+	if is_instance_valid(menu_overlay):
+		menu_overlay.queue_free()
+	menu_overlay = null
 	selected_tab = "Map"
 	selected_subtab = "City" if not world_map else "World"
 	_close_save_overlay()
@@ -2097,6 +2374,7 @@ func _save_game() -> void:
 		return
 	var data := {
 		"version": 1,
+		"saved_at": int(Time.get_unix_time_from_system()),
 		"map_space": "kl_selangor_web_mercator_uv" if geographic_map_available and not legacy_map_mode else "legacy_normalized",
 		"map_bounds_wsen": [IDMGeographicService.WEST, IDMGeographicService.SOUTH, IDMGeographicService.EAST, IDMGeographicService.NORTH] if geographic_map_available and not legacy_map_mode else [],
 		"cash": cash,
@@ -2172,7 +2450,7 @@ func _load_game() -> void:
 	var data := _web_save_mirror()
 	if data.is_empty():
 		if not FileAccess.file_exists(save_path):
-			_new_game()
+			_new_game(false)
 			return
 		var file := FileAccess.open(save_path, FileAccess.READ)
 		if file == null:
@@ -2260,7 +2538,7 @@ func _as_vector2(value: Variant, fallback: Vector2) -> Vector2:
 			return Vector2(parts[0].strip_edges().to_float(), parts[1].strip_edges().to_float())
 	return fallback
 
-func _new_game() -> void:
+func _new_game(persist: bool = true) -> void:
 	save_recovery_required = false
 	legacy_map_mode = false
 	cash = STARTING_CASH
@@ -2295,7 +2573,8 @@ func _new_game() -> void:
 			rider["coordinate_reference"] = "EPSG:4326"
 		riders.append(rider)
 		next_rider_id += 1
-	_save_game()
+	if persist:
+		_save_game()
 
 func _show_save_recovery() -> void:
 	if is_instance_valid(recovery_overlay):
