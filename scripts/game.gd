@@ -87,6 +87,7 @@ var zoom_label: Label
 var world_map := false
 var viewport_size := Vector2(390, 844)
 var safe_insets := Vector4(8, 8, 8, 16)
+var safe_insets_css := Vector4(8, 8, 8, 16)
 var ui_scale := 1.0
 var ui_layout_scale := 1.0
 var maplibre_initialized := false
@@ -118,7 +119,8 @@ func _ready() -> void:
 	_build_ui()
 	ThemeService.theme_changed.connect(_on_theme_changed)
 	get_viewport().size_changed.connect(_layout_ui)
-	safe_insets = _query_safe_insets()
+	safe_insets_css = _query_safe_insets()
+	safe_insets = safe_insets_css
 	_layout_ui()
 	_refresh()
 	_show_main_menu()
@@ -687,23 +689,35 @@ func _layout_ui() -> void:
 	var previous_viewport := viewport_size
 	var previous_map_rect := _map_content_rect(previous_viewport)
 	var window := get_window()
-	viewport_size = Vector2(window.size)
+	var window_size := Vector2(window.size)
+	# Use the actual Godot UI coordinate space, not the browser's CSS canvas
+	# dimensions. With canvas_items stretch those may differ on non-baseline
+	# phones; mixing them makes centered cards exceed the visible viewport.
+	viewport_size = get_viewport_rect().size
 	if viewport_size.x <= 0 or viewport_size.y <= 0:
-		viewport_size = get_viewport_rect().size
+		viewport_size = window_size
 	var viewport_changed := previous_viewport != viewport_size
 	if viewport_changed:
 		map_camera.viewport_changed(previous_viewport, viewport_size, previous_map_rect, _map_content_rect(viewport_size))
 	var is_landscape := viewport_size.x > viewport_size.y
 	var is_desktop := viewport_size.x >= 1024.0 and viewport_size.y >= 600.0
+	var responsive_scale := minf(viewport_size.x / 390.0, viewport_size.y / 844.0)
+	# Keep portrait component geometry in the viewport's native responsive space;
+	# Godot's expanded canvas already adapts anchors. Only typography scales down
+	# on narrow phones so we do not compound viewport scaling and clip cards.
 	ui_layout_scale = 1.0
+	ui_scale = clampf(responsive_scale, 0.9, 1.0)
 	if is_landscape and not is_desktop:
 		# Godot's portrait canvas scale is based on the short landscape height.
 		# Compensate UI geometry and offsets so touch targets stay CSS-sized.
 		ui_layout_scale = clampf(844.0 / viewport_size.y, 1.0, 2.2)
-	ui_scale = clampf(minf(viewport_size.x / 390.0, viewport_size.y / 844.0), 1.0, 1.15)
-	if is_landscape and not is_desktop:
 		ui_scale = ui_layout_scale
-	safe_insets = _read_safe_insets()
+	elif is_desktop:
+		ui_layout_scale = 1.0
+		ui_scale = 1.0
+	var css_to_ui_x := viewport_size.x / window_size.x if window_size.x > 0.0 else 1.0
+	var css_to_ui_y := viewport_size.y / window_size.y if window_size.y > 0.0 else 1.0
+	safe_insets = Vector4(safe_insets_css.x * css_to_ui_x, safe_insets_css.y * css_to_ui_y, safe_insets_css.z * css_to_ui_x, safe_insets_css.w * css_to_ui_y)
 	for speed_button in speed_buttons.values():
 		speed_button.add_theme_font_size_override("font_size", int(round(14.0 * ui_scale)))
 	for map_control in map_controls.get_children():
@@ -759,11 +773,12 @@ func _layout_ui() -> void:
 	sim_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	sim_controls.offset_left = safe_left + 12 * ui_layout_scale
 	sim_controls.offset_top = safe_top + 72 * ui_layout_scale
-	sim_controls.offset_right = safe_left + 306 * ui_layout_scale
+	var available_sim_width := maxf(252.0, viewport_size.x - safe_left - safe_right - 24.0 * ui_layout_scale)
+	sim_controls.offset_right = minf(safe_left + 306.0 * ui_layout_scale, safe_left + available_sim_width)
 	sim_controls.offset_bottom = safe_top + 134 * ui_layout_scale
-	pause_button.custom_minimum_size = Vector2(60, 46) * ui_layout_scale
+	pause_button.custom_minimum_size = Vector2(60 * ui_layout_scale, maxf(44.0, 46.0 * ui_layout_scale))
 	for speed_button in speed_buttons.values():
-		speed_button.custom_minimum_size = Vector2(42, 46) * ui_layout_scale
+		speed_button.custom_minimum_size = Vector2(maxf(44.0, 42.0 * ui_layout_scale), maxf(44.0, 46.0 * ui_layout_scale))
 
 	# The compact landscape sheet sits over the right side of the map. Keep
 	# zoom/recenter controls on the left in both compact and expanded states.
@@ -776,7 +791,7 @@ func _layout_ui() -> void:
 	map_controls.offset_bottom = safe_top + 302 * ui_layout_scale
 	for index in range(map_controls.get_child_count()):
 		var map_control: Button = map_controls.get_child(index)
-		map_control.custom_minimum_size = Vector2(66, 48) * ui_layout_scale
+		map_control.custom_minimum_size = Vector2(maxf(44.0, 66.0 * ui_layout_scale), maxf(44.0, 48.0 * ui_layout_scale))
 
 	bottom_nav.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	if is_desktop:
@@ -789,7 +804,7 @@ func _layout_ui() -> void:
 	bottom_nav.offset_top = -safe_bottom - nav_height * ui_layout_scale
 	bottom_nav.offset_bottom = -safe_bottom
 	for nav_button in nav_buttons.values():
-		nav_button.custom_minimum_size.y = 56 * ui_layout_scale
+		nav_button.custom_minimum_size.y = maxf(44.0, 56.0 * ui_layout_scale)
 
 	if is_desktop or is_landscape:
 		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
@@ -874,8 +889,8 @@ func _update_safe_area(delta: float) -> void:
 		return
 	safe_area_refresh_elapsed = 0.0
 	var queried := _query_safe_insets()
-	if queried != safe_insets:
-		safe_insets = queried
+	if queried != safe_insets_css:
+		safe_insets_css = queried
 		call_deferred("_layout_ui")
 
 func _maplibre_call(expression: String) -> Variant:
@@ -1407,7 +1422,7 @@ func _button(label: String, callback: Callable) -> Button:
 	var button := Button.new()
 	button.text = label
 	button.set_meta("ui_variant", "default")
-	button.custom_minimum_size.y = _ui_size(ThemeService.control_height("compact"))
+	button.custom_minimum_size.y = maxf(44.0, _ui_size(ThemeService.control_height("compact")))
 	button.pressed.connect(callback)
 	button.add_theme_font_size_override("font_size", int(round(14.0 * ui_scale)))
 	button.add_theme_color_override("font_color", ThemeService.color("button_text"))

@@ -80,6 +80,27 @@ html, body {
 </style>
 '''
 html = html.replace('</head>', mobile_css + '\n\t</head>')
+orientation_css = '''
+<style id="idm-phone-orientation">
+#idm-rotate-screen[hidden] { display: none !important; }
+#idm-rotate-screen:not([hidden]) {
+  position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center;
+  box-sizing: border-box; width: 100vw; height: 100vh; height: 100dvh;
+  padding: calc(24px + env(safe-area-inset-top, 0px)) calc(24px + env(safe-area-inset-right, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)) calc(24px + env(safe-area-inset-left, 0px));
+  overflow: auto; background: #081722; color: #f1f6fa;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.idm-rotate-card { width: min(100%, 420px); box-sizing: border-box; padding: clamp(24px, 6vw, 40px); border: 1px solid #234253; border-radius: 24px; background: #102433; text-align: center; box-shadow: 0 22px 70px rgba(0,0,0,.3); }
+.idm-rotate-icon { width: 64px; height: 64px; margin: 0 auto 20px; display: grid; place-items: center; border: 1px solid #28798a; border-radius: 20px; color: #55d9e8; background: #113b48; }
+.idm-rotate-card h1 { margin: 0; font-size: clamp(20px, 5vw, 26px); line-height: 1.25; }
+.idm-rotate-card p { margin: 12px 0 0; color: #a8bac8; font-size: 15px; line-height: 1.5; }
+.idm-rotate-card .idm-rotate-brand { margin-top: 24px; color: #55d9e8; font-size: 13px; }
+html.idm-phone-landscape, html.idm-phone-landscape body { overflow: hidden !important; }
+html.idm-phone-landscape #canvas, html.idm-phone-landscape #idm-map-root, html.idm-phone-landscape #status { visibility: hidden !important; pointer-events: none !important; }
+@media (prefers-reduced-motion: reduce) { #idm-rotate-screen *, #idm-rotate-screen *::before, #idm-rotate-screen *::after { animation: none !important; transition: none !important; } }
+</style>
+'''
+html = html.replace('</head>', orientation_css + '\n</head>')
 loader_css = '''
 <style id="idm-branded-loader">
 #status {
@@ -126,7 +147,16 @@ html = html.replace(
 )
 html = html.replace(
     '</canvas>',
-    '</canvas>\n\t\t<div id="idm-map-root" aria-label="OpenStreetMap geographic basemap"></div>',
+    '</canvas>\n\t\t<div id="idm-map-root" aria-label="OpenStreetMap geographic basemap"></div>\n'
+    '\t\t<div id="idm-rotate-screen" hidden role="status" aria-live="polite">'
+    '<section class="idm-rotate-card" aria-label="Rotate your device to portrait">'
+    '<div class="idm-rotate-icon" aria-hidden="true">'
+    '<svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    '<rect x="12" y="5" width="15" height="27" rx="3" stroke="currentColor" stroke-width="2.2"/>'
+    '<path d="M17 9h5M18 28h3M6 17a13 13 0 0 1 5-9M5 12l1 5 5-1M32 21a13 13 0 0 1-5 9m6-4-1-5-5 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    '</svg></div><h1>Rotate your device to portrait</h1>'
+    '<p>IDLE DELIVERY MANAGER is designed for mobile portrait play.</p>'
+    '<p class="idm-rotate-brand">UR Trade Network</p></section></div>',
     1,
 )
 default_status = '''\t\t<div id="status">
@@ -201,6 +231,42 @@ html = html.replace(
     "\t\t\t\t\tstatusProgress.removeAttribute('max');\n\t\t\t\t\tstatusProgress.removeAttribute('aria-valuetext');\n\t\t\t\t\tstatusOverlay.dataset.progressMode = 'indeterminate';\n\t\t\t\t\tprogressFill.style.width = '';\n\t\t\t\t\tloaderStatus.textContent = 'Loading game files';",
     1,
 )
+orientation_script = '''
+<script id="idm-orientation-controller">
+(() => {
+  const screenEl = document.getElementById('idm-rotate-screen');
+  const root = document.documentElement;
+  const isTouchDevice = () => navigator.maxTouchPoints > 0 || window.matchMedia('(pointer: coarse)').matches;
+  const screenDimensions = () => ({
+    width: Number(window.screen && window.screen.width) || window.innerWidth,
+    height: Number(window.screen && window.screen.height) || window.innerHeight,
+  });
+  const isPhone = () => {
+    const size = screenDimensions();
+    return isTouchDevice() && Math.min(size.width, size.height) <= 600;
+  };
+  const isLandscape = () => {
+    const orientation = window.screen && window.screen.orientation && window.screen.orientation.type;
+    if (orientation && orientation !== 'undefined') return orientation.startsWith('landscape');
+    return window.matchMedia('(orientation: landscape)').matches;
+  };
+  const update = () => {
+    const blocked = isPhone() && isLandscape();
+    screenEl.hidden = !blocked;
+    root.classList.toggle('idm-phone-landscape', blocked);
+  };
+  window.addEventListener('resize', update, { passive: true });
+  window.addEventListener('orientationchange', update, { passive: true });
+  window.addEventListener('pageshow', update, { passive: true });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', update, { passive: true });
+  if (window.screen && window.screen.orientation && typeof window.screen.orientation.addEventListener === 'function') {
+    window.screen.orientation.addEventListener('change', update);
+  }
+  update();
+})();
+</script>
+'''
+html = html.replace('</body>', orientation_script + '\n</body>')
 required_loader_tokens = [
     'IDLE DELIVERY MANAGER',
     'Loading your logistics empire...',
@@ -212,6 +278,10 @@ required_loader_tokens = [
     "statusOverlay.dataset.progressMode = 'indeterminate'",
     'idm-loading-retry',
     'prefers-reduced-motion: reduce',
+    'Rotate your device to portrait',
+    'screen.orientation',
+    'visualViewport',
+    'idm-phone-landscape',
 ]
 for token in required_loader_tokens:
     if token not in html:
