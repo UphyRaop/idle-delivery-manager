@@ -55,7 +55,7 @@ func color(token: String) -> Color:
 
 ## Shared UI rhythm and typography tokens in CSS-pixel equivalents.
 func space(token: String) -> int:
-	return {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 20}.get(token, 12)
+	return {"xxs": 2, "xs": 4, "sm": 6, "md": 10, "lg": 14, "xl": 18}.get(token, 10)
 
 func font_size(token: String) -> int:
 	return {"caption": 11, "body": 14, "section": 16, "title": 20, "metric": 18}.get(token, 14)
@@ -65,6 +65,12 @@ func corner_radius(token: String) -> int:
 
 func control_height(token: String) -> int:
 	return {"compact": 44, "standard": 48, "large": 52}.get(token, 48)
+
+func control_width(token: String) -> int:
+	return {"speed": 44, "pause": 58, "map": 48, "sheet_toggle": 76}.get(token, 44)
+
+func panel_padding(token: String) -> int:
+	return {"compact": 6, "standard": 10, "roomy": 14}.get(token, 10)
 
 func resolve_existing_text(original: Color) -> Color:
 	if mode == "dark":

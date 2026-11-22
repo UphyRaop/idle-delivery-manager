@@ -500,39 +500,39 @@ func _build_ui() -> void:
 	hud.add_theme_stylebox_override("panel", _panel_style("#101e2b", 18))
 	add_child(hud)
 	var top_row := HBoxContainer.new()
-	top_row.add_theme_constant_override("separation", 6)
+	top_row.add_theme_constant_override("separation", ThemeService.space("xs"))
 	hud.add_child(top_row)
 	brand_label = Label.new()
 	brand_label.text = "UR Trade Network"
 	brand_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	brand_label.add_theme_color_override("font_color", Color("#45d9ec"))
-	brand_label.add_theme_font_size_override("font_size", 19)
+	brand_label.add_theme_font_size_override("font_size", ThemeService.font_size("section"))
 	top_row.add_child(brand_label)
 	var activity := VBoxContainer.new()
 	activity.add_theme_constant_override("separation", 1)
-	activity.custom_minimum_size.x = 70
+	activity.custom_minimum_size.x = 66
 	top_row.add_child(activity)
 	active_jobs_label = Label.new()
-	active_jobs_label.add_theme_font_size_override("font_size", 11)
+	active_jobs_label.add_theme_font_size_override("font_size", ThemeService.font_size("caption"))
 	active_jobs_label.add_theme_color_override("font_color", ThemeService.color("text"))
 	activity.add_child(active_jobs_label)
 	pending_jobs_label = Label.new()
-	pending_jobs_label.add_theme_font_size_override("font_size", 10)
+	pending_jobs_label.add_theme_font_size_override("font_size", ThemeService.font_size("caption"))
 	pending_jobs_label.add_theme_color_override("font_color", ThemeService.color("muted"))
 	activity.add_child(pending_jobs_label)
 	var balance := VBoxContainer.new()
-	balance.custom_minimum_size.x = 70
+	balance.custom_minimum_size.x = 76
 	balance.add_theme_constant_override("separation", 0)
 	top_row.add_child(balance)
 	cash_label = Label.new()
 	cash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	cash_label.add_theme_font_size_override("font_size", 16)
+	cash_label.add_theme_font_size_override("font_size", ThemeService.font_size("body"))
 	cash_label.add_theme_color_override("font_color", Color("#f3f7fb"))
 	balance.add_child(cash_label)
 	available_label = Label.new()
 	available_label.text = "1× · RUNNING"
 	available_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	available_label.add_theme_font_size_override("font_size", 9)
+	available_label.add_theme_font_size_override("font_size", ThemeService.font_size("caption"))
 	available_label.add_theme_color_override("font_color", Color("#91a8ba"))
 	balance.add_child(available_label)
 
@@ -541,17 +541,17 @@ func _build_ui() -> void:
 	sim_controls.add_theme_stylebox_override("panel", _panel_style("#102433", 16))
 	add_child(sim_controls)
 	var sim_row := HBoxContainer.new()
-	sim_row.add_theme_constant_override("separation", 4)
+	sim_row.add_theme_constant_override("separation", ThemeService.space("xxs"))
 	sim_controls.add_child(sim_row)
 	pause_button = _button("Pause", _toggle_pause)
-	pause_button.custom_minimum_size = Vector2(60, 46)
+	pause_button.custom_minimum_size = Vector2(ThemeService.control_width("pause"), ThemeService.control_height("compact"))
 	pause_button.tooltip_text = "Pause or resume the simulation"
 	sim_row.add_child(pause_button)
 	for multiplier in [1, 2, 5, 10]:
 		var factor: int = multiplier
 		var speed_button := _button(str(factor) + "×", func(): _set_speed(factor))
-		speed_button.custom_minimum_size = Vector2(42, 46)
-		speed_button.add_theme_font_size_override("font_size", 13)
+		speed_button.custom_minimum_size = Vector2(ThemeService.control_width("speed"), ThemeService.control_height("compact"))
+		speed_button.add_theme_font_size_override("font_size", ThemeService.font_size("caption"))
 		speed_button.tooltip_text = "Set simulation speed to %d times" % factor
 		speed_buttons[factor] = speed_button
 		sim_row.add_child(speed_button)
@@ -572,8 +572,8 @@ func _build_ui() -> void:
 	fit_route_button.tooltip_text = "Fit selected booking or active route"
 	follow_rider_button.tooltip_text = "Follow selected delivery partner"
 	for control in [zoom_in, zoom_out, recenter, fit_route_button, follow_rider_button]:
-		control.custom_minimum_size = Vector2(66, 48)
-		control.add_theme_font_size_override("font_size", 13)
+		control.custom_minimum_size = Vector2(64, ThemeService.control_height("compact"))
+		control.add_theme_font_size_override("font_size", ThemeService.font_size("caption"))
 		map_controls.add_child(control)
 
 	sheet = PanelContainer.new()
@@ -638,7 +638,7 @@ func _build_ui() -> void:
 		var button := _button("", func(): _set_tab(internal_tab))
 		button.tooltip_text = name
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.custom_minimum_size = Vector2(0, 56)
+		button.custom_minimum_size = Vector2(0, ThemeService.control_height("standard"))
 		var nav_content := HBoxContainer.new()
 		nav_content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		nav_content.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -646,13 +646,13 @@ func _build_ui() -> void:
 		nav_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		button.add_child(nav_content)
 		var icon := Control.new()
-		icon.custom_minimum_size = Vector2(16, 16)
+		icon.custom_minimum_size = Vector2(18, 18)
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		icon.draw.connect(func(): _draw_nav_icon(icon, internal_tab, button))
 		nav_content.add_child(icon)
 		var nav_label := Label.new()
 		nav_label.text = "Ops" if internal_tab == "Operations" else internal_tab
-		nav_label.add_theme_font_size_override("font_size", 12)
+		nav_label.add_theme_font_size_override("font_size", ThemeService.font_size("caption"))
 		nav_label.add_theme_color_override("font_color", ThemeService.color("button_text"))
 		nav_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		nav_content.add_child(nav_label)
@@ -667,8 +667,8 @@ func _panel_style(color: String, radius: int) -> StyleBoxFlat:
 	style.set_corner_radius_all(radius)
 	style.content_margin_left = ThemeService.space("md")
 	style.content_margin_right = ThemeService.space("md")
-	style.content_margin_top = ThemeService.space("sm")
-	style.content_margin_bottom = ThemeService.space("sm")
+	style.content_margin_top = ThemeService.panel_padding("compact")
+	style.content_margin_bottom = ThemeService.panel_padding("compact")
 	style.border_width_left = 1
 	style.border_width_top = 1
 	style.border_width_right = 1
@@ -679,7 +679,7 @@ func _panel_style(color: String, radius: int) -> StyleBoxFlat:
 func _label(text: String, size: int, color: String) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_size_override("font_size", int(round(float(size) * ui_scale)))
+	label.add_theme_font_size_override("font_size", maxi(ThemeService.font_size("caption"), int(round(float(size) * ui_scale))))
 	label.add_theme_color_override("font_color", ThemeService.resolve_existing_text(Color(color)))
 	return label
 
@@ -731,11 +731,11 @@ func _layout_ui() -> void:
 		var nav_label: Label = nav_labels[tab]
 		nav_label.text = "Ops" if tab == "Operations" and viewport_size.x < 520.0 and not is_landscape else tab
 		nav_label.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
-	brand_label.add_theme_font_size_override("font_size", int(round(19.0 * ui_scale)))
-	active_jobs_label.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
-	pending_jobs_label.add_theme_font_size_override("font_size", int(round(11.0 * ui_scale)))
+	brand_label.add_theme_font_size_override("font_size", int(round(ThemeService.font_size("section") * ui_scale)))
+	active_jobs_label.add_theme_font_size_override("font_size", int(round(ThemeService.font_size("caption") * ui_scale)))
+	pending_jobs_label.add_theme_font_size_override("font_size", int(round(ThemeService.font_size("caption") * ui_scale)))
 	cash_label.add_theme_font_size_override("font_size", int(round(16.0 * ui_scale)))
-	available_label.add_theme_font_size_override("font_size", int(round(9.0 * ui_scale)))
+	available_label.add_theme_font_size_override("font_size", int(round(ThemeService.font_size("caption") * ui_scale)))
 	status_label.add_theme_font_size_override("font_size", int(round(13.0 * ui_scale)))
 	pause_button.add_theme_font_size_override("font_size", int(round(13.0 * ui_scale)))
 	_update_sim_controls()
@@ -747,17 +747,17 @@ func _layout_ui() -> void:
 		nav_row.add_theme_constant_override("separation", int(round(5.0 * ui_layout_scale)))
 	var selected := _find_order(selected_order)
 	var order_detail_open: bool = selected_tab == "Map" and not selected.is_empty() and (selected["status"] == "Waiting" or str(selected["status"]).begins_with("On route"))
-	var nav_height: int = 76 if not is_landscape else 64
-	var sheet_height: int = 276 if sheet_expanded else 116
+	var nav_height: int = 68 if not is_landscape else 60
+	var sheet_height: int = 260 if sheet_expanded else 104
 	if is_landscape:
-		sheet_height = 224 if sheet_expanded else 108
+		sheet_height = 210 if sheet_expanded else 100
 	if is_desktop:
-		sheet_height = 276 if sheet_expanded else 116
+		sheet_height = 260 if sheet_expanded else 104
 	if selected_tab == "Settings" and sheet_expanded and not is_landscape:
 		sheet_height = 368
 	if selected_tab == "Map" and sheet_expanded:
 		if selected.is_empty():
-			sheet_height = 220 if not is_landscape else 190
+			sheet_height = 206 if not is_landscape else 184
 		elif str(selected.get("status", "")).begins_with("On route"):
 			sheet_height = 204 if not is_landscape else 176
 	var safe_left := safe_insets.x
@@ -772,13 +772,13 @@ func _layout_ui() -> void:
 	hud.offset_bottom = safe_top + 64 * ui_layout_scale
 	sim_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	sim_controls.offset_left = safe_left + 12 * ui_layout_scale
-	sim_controls.offset_top = safe_top + 72 * ui_layout_scale
+	sim_controls.offset_top = safe_top + 64 * ui_layout_scale
 	var available_sim_width := maxf(252.0, viewport_size.x - safe_left - safe_right - 24.0 * ui_layout_scale)
-	sim_controls.offset_right = minf(safe_left + 306.0 * ui_layout_scale, safe_left + available_sim_width)
-	sim_controls.offset_bottom = safe_top + 134 * ui_layout_scale
-	pause_button.custom_minimum_size = Vector2(60 * ui_layout_scale, maxf(44.0, 46.0 * ui_layout_scale))
+	sim_controls.offset_right = minf(safe_left + 286.0 * ui_layout_scale, safe_left + available_sim_width)
+	sim_controls.offset_bottom = safe_top + 122 * ui_layout_scale
+	pause_button.custom_minimum_size = Vector2(ThemeService.control_width("pause") * ui_layout_scale, maxf(44.0, ThemeService.control_height("compact") * ui_layout_scale))
 	for speed_button in speed_buttons.values():
-		speed_button.custom_minimum_size = Vector2(maxf(44.0, 42.0 * ui_layout_scale), maxf(44.0, 46.0 * ui_layout_scale))
+		speed_button.custom_minimum_size = Vector2(maxf(44.0, ThemeService.control_width("speed") * ui_layout_scale), maxf(44.0, ThemeService.control_height("compact") * ui_layout_scale))
 
 	# The compact landscape sheet sits over the right side of the map. Keep
 	# zoom/recenter controls on the left in both compact and expanded states.
@@ -791,11 +791,11 @@ func _layout_ui() -> void:
 	map_controls.offset_bottom = safe_top + 302 * ui_layout_scale
 	for index in range(map_controls.get_child_count()):
 		var map_control: Button = map_controls.get_child(index)
-		map_control.custom_minimum_size = Vector2(maxf(44.0, 66.0 * ui_layout_scale), maxf(44.0, 48.0 * ui_layout_scale))
+		map_control.custom_minimum_size = Vector2(maxf(58.0, 64.0 * ui_layout_scale), maxf(44.0, ThemeService.control_height("compact") * ui_layout_scale))
 
 	bottom_nav.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	if is_desktop:
-		var nav_width := 480.0 * ui_layout_scale
+		var nav_width := 456.0 * ui_layout_scale
 		bottom_nav.offset_left = maxf(safe_left + 12 * ui_layout_scale, (viewport_size.x - nav_width) * 0.5)
 		bottom_nav.offset_right = -maxf(safe_right + 12 * ui_layout_scale, (viewport_size.x - nav_width) * 0.5)
 	else:
@@ -804,11 +804,11 @@ func _layout_ui() -> void:
 	bottom_nav.offset_top = -safe_bottom - nav_height * ui_layout_scale
 	bottom_nav.offset_bottom = -safe_bottom
 	for nav_button in nav_buttons.values():
-		nav_button.custom_minimum_size.y = maxf(44.0, 56.0 * ui_layout_scale)
+		nav_button.custom_minimum_size.y = maxf(float(ThemeService.control_height("compact")), 50.0 * ui_layout_scale)
 
 	if is_desktop or is_landscape:
 		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
-		sheet.offset_left = -366 * ui_layout_scale
+		sheet.offset_left = -352 * ui_layout_scale
 		sheet.offset_right = -safe_right - 12 * ui_layout_scale
 		sheet.offset_top = -safe_bottom - (nav_height + 8 + sheet_height) * ui_layout_scale
 		sheet.offset_bottom = -safe_bottom - (nav_height + 8) * ui_layout_scale
@@ -1977,20 +1977,20 @@ func _refresh() -> void:
 func _metric_card(title: String, value: String) -> Control:
 	var card := PanelContainer.new()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card.custom_minimum_size = Vector2(0, 58)
+	card.custom_minimum_size = Vector2(0, 56)
 	var card_style := _panel_style("#152e3e", 13)
 	card_style.content_margin_left = ThemeService.space("sm")
 	card_style.content_margin_right = ThemeService.space("sm")
-	card_style.content_margin_top = 3
-	card_style.content_margin_bottom = 3
+	card_style.content_margin_top = ThemeService.space("xxs")
+	card_style.content_margin_bottom = ThemeService.space("xxs")
 	card.add_theme_stylebox_override("panel", card_style)
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 2)
 	card.add_child(stack)
-	var heading := _label(title, 10, "#9db1c1")
+	var heading := _label(title, ThemeService.font_size("caption"), "#9db1c1")
 	heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stack.add_child(heading)
-	var amount := _label(value, 18, "#f1f6fa")
+	var amount := _label(value, ThemeService.font_size("metric"), "#f1f6fa")
 	var amount_size := 18 if value.length() <= 10 else 15 if value.length() <= 14 else 13
 	amount.add_theme_font_size_override("font_size", int(round(float(amount_size) * ui_scale)))
 	stack.add_child(amount)
