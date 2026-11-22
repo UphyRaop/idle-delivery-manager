@@ -48,6 +48,7 @@ jobs:
           godot --headless --path . --script tests/route_simulation_test.gd
           godot --headless --path . --script tests/map_camera_test.gd
           godot --headless --path . --script tests/game_route_integration_test.gd
+          godot --headless --path . --script tests/service_pricing_test.gd
 
       - name: Export and verify the Web game
         run: ./scripts/export-web.sh
