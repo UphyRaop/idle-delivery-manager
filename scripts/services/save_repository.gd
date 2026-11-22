@@ -11,10 +11,7 @@ static func migrate_legacy_v1(payload: Dictionary) -> Dictionary:
 	if int(payload.get("version", 0)) != 1:
 		return {}
 	var cash_sen := _rm_to_sen(payload.get("cash", 500.0))
-	var legacy_speed := int(payload.get("speed", 1))
-	var migrated_speed := 5 if legacy_speed == 4 else legacy_speed
-	if migrated_speed not in [1, 2, 5, 10]:
-		migrated_speed = 1
+	var migrated_speed := IDMSimulationClock.normalize_saved_speed(int(payload.get("speed", 1)))
 	var partners: Array[Dictionary] = []
 	for value in payload.get("riders", []):
 		if typeof(value) != TYPE_DICTIONARY:

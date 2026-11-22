@@ -23,6 +23,8 @@ func _run() -> void:
 	_check(not bool(game.get("game_session_started")), "startup does not start a simulation session")
 	var menu: Control = game.get("menu_overlay")
 	_check(is_instance_valid(menu), "main menu overlay is available")
+	var speed_buttons: Dictionary = game.get("speed_buttons")
+	_check(speed_buttons.keys().size() == 5 and speed_buttons.has(1) and speed_buttons.has(5) and speed_buttons.has(10) and speed_buttons.has(50) and speed_buttons.has(100) and not speed_buttons.has(2), "speed selector exposes exactly 1x, 5x, 10x, 50x and 100x")
 	var labels := _all_text(menu)
 	_check(labels.has("IDLE DELIVERY MANAGER"), "main menu uses the approved game title")
 	_check(labels.has("UR Trade Network"), "main menu shows the approved company name")

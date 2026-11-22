@@ -35,6 +35,8 @@ func _test_save_migration() -> void:
 	_check(migrated["companies"][0]["partners"][0]["relationship"] == "independent_contractor", "legacy riders represented as partners")
 	_check(migrated["companies"][0]["partners"][0]["legacy_position"]["coordinate_space"] == "legacy_normalized", "normalized map positions not misrepresented as geographic")
 	_check(migrated["simulation"]["speed"] == 5, "legacy 4x maps to supported 5x speed")
+	_check(IDMSimulationClock.normalize_saved_speed(2) == 1, "legacy 2x save restores conservatively as 1x")
+	_check(IDMSimulationClock.normalize_saved_speed(100) == 100, "100x save speed remains supported")
 	_check(old["cash"] == 123.45 and old["version"] == 1, "migration leaves source payload unchanged")
 	_check(IDMSaveRepository.migrate_legacy_v1({"version": 99}).is_empty(), "unknown schema rejected")
 
@@ -74,11 +76,23 @@ func _test_clock() -> void:
 	var clock := IDMSimulationClock.new()
 	_check(clock.advance(0.25) == 2, "clock returns deterministic fixed ticks")
 	_check(is_equal_approx(clock.simulation_seconds, 0.2), "clock advances only completed fixed steps")
-	_check(clock.set_speed(10), "10x speed supported")
-	_check(clock.advance(0.1) == 10, "simulation speed scales ticks")
+	var speed_counts := {1: 1, 5: 5, 10: 10, 50: 25, 100: 25}
+	for factor in [1, 5, 10, 50, 100]:
+		clock.clear_accumulator()
+		_check(clock.set_speed(factor), "%dx speed supported" % factor)
+		_check(clock.advance(0.1) == speed_counts[factor], "%dx speed advances fixed steps within the per-frame work cap" % factor)
+	clock.clear_accumulator()
+	clock.set_speed(100)
+	var starting_simulation_seconds := clock.simulation_seconds
+	var accumulated_ticks := clock.advance(0.1)
+	for _frame in 4:
+		accumulated_ticks += clock.advance(0.001)
+	_check(accumulated_ticks == 104 and is_equal_approx(clock.simulation_seconds - starting_simulation_seconds, 10.4), "100x catch-up preserves accumulated time without dropping ticks")
 	clock.set_paused(true)
+	var paused_seconds := clock.simulation_seconds
 	_check(clock.advance(5.0) == 0, "pause prevents simulation advancement")
-	_check(not clock.set_speed(4), "unsupported simulation speed rejected")
+	_check(is_equal_approx(clock.simulation_seconds, paused_seconds), "pause freezes simulation time while keeping clock resumable")
+	_check(not clock.set_speed(2) and not clock.set_speed(4), "removed 2x and 4x speeds are rejected")
 
 func _test_geographic_data() -> void:
 	var geography := IDMGeographicService.new()
