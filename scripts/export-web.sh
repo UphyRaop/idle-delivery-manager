@@ -28,6 +28,9 @@ done
 
 cp CNAME "$staging/CNAME"
 cp favicon.svg "$staging/favicon.svg"
+mkdir -p "$staging/vendor"
+cp web/vendor/maplibre-gl.js web/vendor/maplibre-gl.css web/vendor/MAPLIBRE-LICENSE.txt "$staging/vendor/"
+cp web/maplibre_bridge.js web/maplibre_bridge.css "$staging/"
 sed -i 's#<head>#<head><link rel="icon" type="image/svg+xml" href="./favicon.svg">#' "$staging/index.html"
 grep -q 'href="./favicon.svg"' "$staging/index.html"
 python3 - "$staging/index.html" <<'PY'
@@ -65,6 +68,7 @@ html, body {
 #canvas {
   position: fixed;
   inset: 0;
+  z-index: 1;
   width: 100vw !important;
   height: 100vh !important;
   height: 100dvh !important;
@@ -76,6 +80,26 @@ html, body {
 </style>
 '''
 html = html.replace('</head>', mobile_css + '\n\t</head>')
+html = html.replace(
+    '</head>',
+    '<link rel="stylesheet" href="./vendor/maplibre-gl.css">\n'
+    '<link rel="stylesheet" href="./maplibre_bridge.css">\n</head>'
+)
+html = html.replace(
+    '<canvas id="canvas">',
+    '<canvas id="canvas">',
+)
+html = html.replace(
+    '</canvas>',
+    '</canvas>\n\t\t<div id="idm-map-root" aria-label="OpenStreetMap geographic basemap"></div>',
+    1,
+)
+html = html.replace(
+    '<script src="index.js"></script>',
+    '<script src="./vendor/maplibre-gl.js"></script>\n'
+    '\t\t<script src="./maplibre_bridge.js"></script>\n'
+    '\t\t<script src="index.js"></script>',
+)
 html_path.write_text(html)
 PY
 grep -q 'viewport-fit=cover' "$staging/index.html"

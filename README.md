@@ -1,6 +1,6 @@
 # Idle Delivery Manager
 
-Mobile-first delivery management tycoon built with Godot 4. The playable prototype uses a fictional city map, touch-friendly order markers, a compact expanding management sheet, and persistent bottom navigation.
+Mobile-first delivery management tycoon built with Godot 4. Geographic saves use an interactive OpenStreetMap basemap with KL/Selangor road routing; legacy saves remain isolated on their fictional map to preserve their coordinate data. The game uses touch-friendly booking markers, an expanding management sheet, and persistent bottom navigation.
 
 ## Develop locally
 
@@ -16,6 +16,8 @@ Mobile-first delivery management tycoon built with Godot 4. The playable prototy
 4. Open `http://localhost:8000` in a WebGL 2-capable browser. Use a portrait mobile viewport or connect from a phone on the same network using the computer's LAN address.
 
 The project starts from a 390 × 844 portrait viewport and supports sensor-based rotation. Web layout follows the available browser viewport, disables page scrolling, and reads iOS safe-area insets. The Compatibility renderer and single-threaded Web export work on static hosting without cross-origin isolation headers.
+
+Map renderer and public tile-provider terms are documented in [docs/map-rendering.md](docs/map-rendering.md).
 
 ## Project structure
 
