@@ -39,6 +39,8 @@ var status_label: Label
 var cash_label: Label
 var active_jobs_label: Label
 var pending_jobs_label: Label
+var brand_label: Label
+var available_label: Label
 var geographic_service := IDMGeographicService.new()
 var road_router := IDMRoadRouter.new()
 var route_simulations: Dictionary = {}
@@ -76,6 +78,7 @@ var world_map := false
 var viewport_size := Vector2(390, 844)
 var safe_insets := Vector4(8, 8, 8, 16)
 var ui_scale := 1.0
+var ui_layout_scale := 1.0
 var maplibre_initialized := false
 var browser_map_state: Dictionary = {}
 var pending_map_camera: Dictionary = {}
@@ -275,12 +278,12 @@ func _build_ui() -> void:
 	var top_row := HBoxContainer.new()
 	top_row.add_theme_constant_override("separation", 6)
 	hud.add_child(top_row)
-	var brand := Label.new()
-	brand.text = "IDM"
-	brand.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	brand.add_theme_color_override("font_color", Color("#45d9ec"))
-	brand.add_theme_font_size_override("font_size", 19)
-	top_row.add_child(brand)
+	brand_label = Label.new()
+	brand_label.text = "IDM"
+	brand_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	brand_label.add_theme_color_override("font_color", Color("#45d9ec"))
+	brand_label.add_theme_font_size_override("font_size", 19)
+	top_row.add_child(brand_label)
 	var activity := VBoxContainer.new()
 	activity.add_theme_constant_override("separation", 1)
 	activity.custom_minimum_size.x = 70
@@ -302,12 +305,12 @@ func _build_ui() -> void:
 	cash_label.add_theme_font_size_override("font_size", 16)
 	cash_label.add_theme_color_override("font_color", Color("#f3f7fb"))
 	balance.add_child(cash_label)
-	var balance_caption := Label.new()
-	balance_caption.text = "AVAILABLE"
-	balance_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	balance_caption.add_theme_font_size_override("font_size", 10)
-	balance_caption.add_theme_color_override("font_color", Color("#91a8ba"))
-	balance.add_child(balance_caption)
+	available_label = Label.new()
+	available_label.text = "AVAILABLE"
+	available_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	available_label.add_theme_font_size_override("font_size", 10)
+	available_label.add_theme_color_override("font_color", Color("#91a8ba"))
+	balance.add_child(available_label)
 
 	sim_controls = PanelContainer.new()
 	sim_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
@@ -434,12 +437,39 @@ func _layout_ui() -> void:
 	viewport_size = Vector2(window.size)
 	if viewport_size.x <= 0 or viewport_size.y <= 0:
 		viewport_size = get_viewport_rect().size
-	if previous_viewport != viewport_size:
+	var viewport_changed := previous_viewport != viewport_size
+	if viewport_changed:
 		map_camera.viewport_changed(previous_viewport, viewport_size, previous_map_rect, _map_content_rect(viewport_size))
-	ui_scale = clampf(minf(viewport_size.x / 390.0, viewport_size.y / 844.0), 1.0, 1.15)
-	safe_insets = _read_safe_insets()
 	var is_landscape := viewport_size.x > viewport_size.y
 	var is_desktop := viewport_size.x >= 1024.0 and viewport_size.y >= 600.0
+	ui_layout_scale = 1.0
+	if is_landscape and not is_desktop:
+		# Godot's portrait canvas scale is based on the short landscape height.
+		# Compensate UI geometry and offsets so touch targets stay CSS-sized.
+		ui_layout_scale = clampf(844.0 / viewport_size.y, 1.0, 2.2)
+	ui_scale = clampf(minf(viewport_size.x / 390.0, viewport_size.y / 844.0), 1.0, 1.15)
+	if is_landscape and not is_desktop:
+		ui_scale = ui_layout_scale
+	safe_insets = _read_safe_insets()
+	for speed_button in speed_buttons.values():
+		speed_button.add_theme_font_size_override("font_size", int(round(14.0 * ui_scale)))
+	for map_control in map_controls.get_children():
+		map_control.add_theme_font_size_override("font_size", int(round((14.0 if map_control.text.begins_with("Zoom") or map_control.text == "Center" else 22.0) * ui_scale)))
+	for nav_button in nav_buttons.values():
+		nav_button.add_theme_font_size_override("font_size", int(round(14.0 * ui_scale)))
+	brand_label.add_theme_font_size_override("font_size", int(round(19.0 * ui_scale)))
+	active_jobs_label.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
+	pending_jobs_label.add_theme_font_size_override("font_size", int(round(11.0 * ui_scale)))
+	cash_label.add_theme_font_size_override("font_size", int(round(16.0 * ui_scale)))
+	available_label.add_theme_font_size_override("font_size", int(round(10.0 * ui_scale)))
+	status_label.add_theme_font_size_override("font_size", int(round(13.0 * ui_scale)))
+	pause_button.add_theme_font_size_override("font_size", int(round(15.0 * ui_scale)))
+	var sim_row := sim_controls.get_child(0) as HBoxContainer
+	if sim_row != null:
+		sim_row.add_theme_constant_override("separation", int(round(4.0 * ui_layout_scale)))
+	var nav_row := bottom_nav.get_child(0) as HBoxContainer
+	if nav_row != null:
+		nav_row.add_theme_constant_override("separation", int(round(5.0 * ui_layout_scale)))
 	var selected := _find_order(selected_order)
 	var order_detail_open: bool = selected_tab == "Map" and not selected.is_empty() and selected["status"] == "Waiting"
 	var nav_height: int = 76 if not is_landscape else 64
@@ -454,59 +484,68 @@ func _layout_ui() -> void:
 	var safe_bottom := safe_insets.w
 
 	hud.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	hud.offset_left = safe_left + 12
-	hud.offset_top = safe_top + 8
-	hud.offset_right = -safe_right - 12
-	hud.offset_bottom = safe_top + 64
+	hud.offset_left = safe_left + 12 * ui_layout_scale
+	hud.offset_top = safe_top + 8 * ui_layout_scale
+	hud.offset_right = -safe_right - 12 * ui_layout_scale
+	hud.offset_bottom = safe_top + 64 * ui_layout_scale
 	sim_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	sim_controls.offset_left = safe_left + 12
-	sim_controls.offset_top = safe_top + 72
-	sim_controls.offset_right = safe_left + 306
-	sim_controls.offset_bottom = safe_top + 134
+	sim_controls.offset_left = safe_left + 12 * ui_layout_scale
+	sim_controls.offset_top = safe_top + 72 * ui_layout_scale
+	sim_controls.offset_right = safe_left + 306 * ui_layout_scale
+	sim_controls.offset_bottom = safe_top + 134 * ui_layout_scale
+	pause_button.custom_minimum_size = Vector2(74, 52) * ui_layout_scale
+	for speed_button in speed_buttons.values():
+		speed_button.custom_minimum_size = Vector2(50, 52) * ui_layout_scale
 
 	# The compact landscape sheet sits over the right side of the map. Keep
 	# zoom/recenter controls on the left in both compact and expanded states.
 	var controls_on_left := is_landscape
 	map_controls.columns = 1
 	map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT if controls_on_left else Control.PRESET_TOP_RIGHT)
-	map_controls.offset_left = safe_left + 12 if controls_on_left else -safe_right - 102
-	map_controls.offset_right = safe_left + 102 if controls_on_left else -safe_right - 12
-	map_controls.offset_top = safe_top + 148
-	map_controls.offset_bottom = safe_top + 300
+	map_controls.offset_left = safe_left + 12 * ui_layout_scale if controls_on_left else -safe_right - 102 * ui_layout_scale
+	map_controls.offset_right = safe_left + 102 * ui_layout_scale if controls_on_left else -safe_right - 12 * ui_layout_scale
+	map_controls.offset_top = safe_top + 148 * ui_layout_scale
+	map_controls.offset_bottom = safe_top + 300 * ui_layout_scale
+	for index in range(map_controls.get_child_count()):
+		var map_control: Button = map_controls.get_child(index)
+		map_control.custom_minimum_size = (Vector2(82, 58) if index < 2 else Vector2(72, 54)) * ui_layout_scale
 
 	bottom_nav.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	if is_desktop:
-		var nav_width := 480.0
-		bottom_nav.offset_left = maxf(safe_left + 12, (viewport_size.x - nav_width) * 0.5)
-		bottom_nav.offset_right = -maxf(safe_right + 12, (viewport_size.x - nav_width) * 0.5)
+		var nav_width := 480.0 * ui_layout_scale
+		bottom_nav.offset_left = maxf(safe_left + 12 * ui_layout_scale, (viewport_size.x - nav_width) * 0.5)
+		bottom_nav.offset_right = -maxf(safe_right + 12 * ui_layout_scale, (viewport_size.x - nav_width) * 0.5)
 	else:
-		bottom_nav.offset_left = safe_left + 8
-		bottom_nav.offset_right = -safe_right - 8
-	bottom_nav.offset_top = -safe_bottom - nav_height
+		bottom_nav.offset_left = safe_left + 8 * ui_layout_scale
+		bottom_nav.offset_right = -safe_right - 8 * ui_layout_scale
+	bottom_nav.offset_top = -safe_bottom - nav_height * ui_layout_scale
 	bottom_nav.offset_bottom = -safe_bottom
+	for nav_button in nav_buttons.values():
+		nav_button.custom_minimum_size.y = 56 * ui_layout_scale
 
 	if is_desktop or is_landscape:
 		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
-		sheet.offset_left = -366
-		sheet.offset_right = -safe_right - 12
-		sheet.offset_top = -safe_bottom - nav_height - 8 - sheet_height
-		sheet.offset_bottom = -safe_bottom - nav_height - 8
+		sheet.offset_left = -366 * ui_layout_scale
+		sheet.offset_right = -safe_right - 12 * ui_layout_scale
+		sheet.offset_top = -safe_bottom - (nav_height + 8 + sheet_height) * ui_layout_scale
+		sheet.offset_bottom = -safe_bottom - (nav_height + 8) * ui_layout_scale
 	else:
 		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-		sheet.offset_left = safe_left + 10
-		sheet.offset_right = -safe_right - 10
-		sheet.offset_top = -safe_bottom - nav_height - 8 - sheet_height
-		sheet.offset_bottom = -safe_bottom - nav_height - 8
+		sheet.offset_left = safe_left + 10 * ui_layout_scale
+		sheet.offset_right = -safe_right - 10 * ui_layout_scale
+		sheet.offset_top = -safe_bottom - (nav_height + 8 + sheet_height) * ui_layout_scale
+		sheet.offset_bottom = -safe_bottom - (nav_height + 8) * ui_layout_scale
 
 	if is_instance_valid(sheet_toggle_button):
 		sheet_toggle_button.text = "Hide" if sheet_expanded else "Expand"
+		sheet_toggle_button.add_theme_font_size_override("font_size", int(round(15.0 * ui_scale)))
 	if is_instance_valid(sheet_header_label):
 		sheet_header_label.text = _sheet_title()
 	sheet_content.add_theme_constant_override("separation", 3 if is_landscape and sheet_expanded else 6)
 	if sheet_content.get_child_count() > 0:
-		sheet_content.get_child(0).custom_minimum_size.y = 8 if is_landscape and sheet_expanded else 10
+			sheet_content.get_child(0).custom_minimum_size.y = (8 if is_landscape and sheet_expanded else 10) * ui_layout_scale
 	if is_instance_valid(sheet_toggle_button):
-		sheet_toggle_button.custom_minimum_size.y = 40 if is_landscape and sheet_expanded else 44
+		sheet_toggle_button.custom_minimum_size = Vector2(76, 40 if is_landscape and sheet_expanded else 44) * ui_layout_scale
 	if is_instance_valid(order_list):
 		var subtabs: HBoxContainer = sheet_content.find_child("Subtabs", true, false)
 		if is_instance_valid(subtabs):
@@ -514,7 +553,7 @@ func _layout_ui() -> void:
 			# City/World navigation remains available again when the order card closes.
 			subtabs.visible = sheet_expanded and not order_detail_open
 			for subtab in subtabs.get_children():
-				subtab.custom_minimum_size.y = 40 if is_landscape and sheet_expanded else 46
+				subtab.custom_minimum_size.y = (40 if is_landscape and sheet_expanded else 46) * ui_layout_scale
 		order_list.visible = sheet_expanded or selected_tab == "Map"
 		if not sheet_expanded and selected_tab == "Map":
 			for child in order_list.get_children():
@@ -530,6 +569,11 @@ func _layout_ui() -> void:
 		nav_button.modulate = Color("#3bd5e8") if selected_button else Color("#dbe7ef")
 	map_view.queue_redraw()
 	_sync_map_input_blockers()
+	if viewport_changed:
+		call_deferred("_refresh")
+
+func _ui_size(value: float) -> float:
+	return value * ui_layout_scale
 
 func _read_safe_insets() -> Vector4:
 	return safe_insets
@@ -974,7 +1018,7 @@ func _select_marker(point: Vector2) -> void:
 func _button(label: String, callback: Callable) -> Button:
 	var button := Button.new()
 	button.text = label
-	button.custom_minimum_size.y = 46
+	button.custom_minimum_size.y = _ui_size(46)
 	button.pressed.connect(callback)
 	button.add_theme_font_size_override("font_size", int(round(15.0 * ui_scale)))
 	button.add_theme_color_override("font_color", ThemeService.color("button_text"))
@@ -1313,7 +1357,7 @@ func _refresh() -> void:
 		for option in options:
 			var subtab := _button(option, func(): _set_subtab(option))
 			subtab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			subtab.custom_minimum_size = Vector2(0, 46)
+			subtab.custom_minimum_size = Vector2(0, _ui_size(46))
 			if option == selected_subtab:
 				subtab.modulate = Color("#43d6e8")
 			subtabs.add_child(subtab)
@@ -1334,7 +1378,7 @@ func _refresh() -> void:
 					order_list.add_child(_label("Base RM%.2f  +  distance RM%.2f  +  time RM%.2f" % [float(quote.get("base_rm", 0.0)), float(quote.get("distance_rm", 0.0)), float(quote.get("time_rm", 0.0))], 10, "#91a8ba"))
 				order_list.add_child(_label("Automatic simulated fare · not an official rate", 10, "#91a8ba"))
 				var dispatch := _button("Dispatch rider", func(): _dispatch(selected["id"]))
-				dispatch.custom_minimum_size.y = 50
+				dispatch.custom_minimum_size.y = _ui_size(50)
 				dispatch.add_theme_color_override("font_color", Color("#04252d"))
 				var dispatch_style := StyleBoxFlat.new()
 				dispatch_style.bg_color = Color("#48d9e9")
@@ -1350,10 +1394,10 @@ func _refresh() -> void:
 					var eta_text := "ETA paused" if paused or eta < 0.0 else "ETA %d min" % int(ceil(eta / 60.0))
 					order_list.add_child(_label("%.1f km total  ·  %.1f km remaining  ·  %s" % [route_sim.total_distance_km(), route_sim.remaining_distance_km(), eta_text], 12, "#a8bac8"))
 					var follow_button := _button("Stop following" if map_camera.follow_enabled and followed_rider_id == route_rider_id else "Follow partner", func(): _toggle_follow(route_rider_id))
-					follow_button.custom_minimum_size.y = 42
+					follow_button.custom_minimum_size.y = _ui_size(42)
 					order_list.add_child(follow_button)
 					var fit_button := _button("Fit route", func(): _fit_selected_route(route_sim))
-					fit_button.custom_minimum_size.y = 42
+					fit_button.custom_minimum_size.y = _ui_size(42)
 					order_list.add_child(fit_button)
 				else:
 					order_list.add_child(_label("The road route is being restored.", 13, "#a8bac8"))
@@ -1370,7 +1414,7 @@ func _refresh() -> void:
 				order_list.add_child(ready_label)
 				order_list.add_child(_label("%d on route   ·   %d total partners" % [_busy_count(), riders.size()], 13, "#a8bac8"))
 				var hire := _button("+   Recruit partner  ·  RM120", _hire_rider)
-				hire.custom_minimum_size.y = 50
+				hire.custom_minimum_size.y = _ui_size(50)
 				hire.disabled = cash < 120
 				order_list.add_child(hire)
 			else:
@@ -1395,23 +1439,23 @@ func _refresh() -> void:
 				order_list.add_child(_label("Appearance", 16, "#f1f6fa"))
 				order_list.add_child(_label("Choose a readable map and panel theme.", 13, "#a8bac8"))
 				var theme_button := _button("Switch to light theme" if ThemeService.mode == "dark" else "Switch to dark theme", _toggle_theme)
-				theme_button.custom_minimum_size.y = 50
+				theme_button.custom_minimum_size.y = _ui_size(50)
 				order_list.add_child(theme_button)
 			else:
 				order_list.add_child(_label("LEGACY · FICTIONAL MAP · PRESERVED" if legacy_map_mode else "GEOGRAPHIC · KL / SELANGOR", 12, "#f1f6fa"))
 				var continue_button := _button("Continue Game", _continue_game)
-				continue_button.custom_minimum_size.y = 46
+				continue_button.custom_minimum_size.y = _ui_size(46)
 				order_list.add_child(continue_button)
 				var save_actions := HBoxContainer.new()
 				save_actions.add_theme_constant_override("separation", 6)
 				order_list.add_child(save_actions)
 				var load_button := _button("Load Game", _show_load_game)
 				load_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				load_button.custom_minimum_size.y = 46
+				load_button.custom_minimum_size.y = _ui_size(46)
 				save_actions.add_child(load_button)
 				var new_game_button := _button("New Game", _confirm_new_game)
 				new_game_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				new_game_button.custom_minimum_size.y = 46
+				new_game_button.custom_minimum_size.y = _ui_size(46)
 				save_actions.add_child(new_game_button)
 	rider_summary = null
 	finance_summary = null
