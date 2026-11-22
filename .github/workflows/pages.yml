@@ -50,6 +50,7 @@ jobs:
           godot --headless --path . --script tests/game_route_integration_test.gd
           godot --headless --path . --script tests/service_pricing_test.gd
           godot --headless --path . --script tests/save_profile_test.gd
+          godot --headless --path . --script tests/main_menu_test.gd
 
       - name: Export and verify the Web game
         run: ./scripts/export-web.sh

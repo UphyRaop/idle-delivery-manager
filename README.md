@@ -1,6 +1,8 @@
-# Idle Delivery Manager
+# IDLE DELIVERY MANAGER
 
-Mobile-first delivery management tycoon built with Godot 4. Geographic saves use an interactive OpenStreetMap basemap with KL/Selangor road routing; legacy saves remain isolated on their fictional map to preserve their coordinate data. The game uses touch-friendly booking markers, an expanding management sheet, and persistent bottom navigation.
+Mobile-first delivery management tycoon built with Godot 4.5.1. Startup opens the branded New Game / Continue / Load Game / Settings menu. Geographic saves use an interactive OpenStreetMap basemap with KL/Selangor road routing; legacy saves remain isolated on their fictional map to preserve their coordinate data. The game uses touch-friendly booking markers, an expanding management sheet, and persistent bottom navigation.
+
+Continue selects the valid save with the newest saved_at timestamp. Older saves without a timestamp fall back to their profile creation time. New Game creates a separate geographic save profile and leaves existing profiles available through Load Game.
 
 ## Develop locally
 
@@ -29,7 +31,7 @@ Map renderer and public tile-provider terms are documented in [docs/map-renderin
 - `tests/run_tests.gd` is the headless regression runner for those foundations. Run it with `godot --headless --path . --script tests/run_tests.gd`.
 - `docs/architecture.md` records module contracts, migration safety, and the geographic data decision.
 
-The current game remains the original parcel prototype with a clearly labeled fictional map. The new foundations are being integrated incrementally; they do not yet constitute the complete approved redesign.
+The Web export script also injects the branded startup loader into each clean export. It uses Godot's real download progress, displays an indeterminate indicator when no total is available, respects reduced motion, and offers a reload action when startup fails.
 
 ## GitHub Pages
 

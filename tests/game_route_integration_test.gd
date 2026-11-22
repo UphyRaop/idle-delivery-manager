@@ -17,11 +17,12 @@ func _check(condition: bool, label: String) -> void:
 func _run() -> void:
 	var game := Control.new()
 	game.set_script(load("res://scripts/game.gd"))
-	game.set("save_path", "user://m3_route_integration_test.json")
 	root.add_child(game)
 	await process_frame
 	_check(bool(game.get("road_network_available")), "game loads the bundled road graph")
+	game.set("save_path", "user://delivery_ops_session_m3_route_integration_test.json")
 	game.call("_new_game")
+	game.call("_continue_game")
 	var riders: Array[Dictionary] = game.get("riders")
 	if riders.is_empty():
 		_check(false, "new game creates starting delivery partners")
@@ -72,7 +73,7 @@ func _run() -> void:
 	_check(is_equal_approx(float(game.get("cash")), cash_before + float(order["payout"]) - 18.0), "completed route updates cash by payout less operating cost")
 	_check(is_equal_approx(float(game.get("revenue_total")), revenue_before + float(order["payout"])), "completed route posts revenue once")
 	_check(is_equal_approx(float(game.get("cost_total")), costs_before + 18.0) and int(game.get("delivered")) == 1, "completed route posts cost and delivery totals once")
-	var test_path := "user://m3_route_integration_test.json"
+	var test_path := "user://delivery_ops_session_m3_route_integration_test.json"
 	if FileAccess.file_exists(test_path):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(test_path))
 	game.queue_free()
