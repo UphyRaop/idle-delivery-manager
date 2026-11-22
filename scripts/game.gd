@@ -19,6 +19,7 @@ var orders: Array[Dictionary] = []
 var paused := false
 var speed := 1
 var elapsed := 0.0
+var autosave_elapsed := 0.0
 var next_order_id := 1
 var next_rider_id := 1
 var selected_order := -1
@@ -31,7 +32,10 @@ var cash_label: Label
 var active_jobs_label: Label
 var pending_jobs_label: Label
 var geographic_service := IDMGeographicService.new()
+var road_router := IDMRoadRouter.new()
+var route_simulations: Dictionary = {}
 var geographic_map_available := false
+var road_network_available := false
 var legacy_map_mode := false
 var map_texture: Texture2D
 var pause_button: Button
@@ -50,11 +54,13 @@ var selected_subtab := "City"
 var sheet_expanded := false
 var last_tap_msec := 0
 var map_mode := "City"
-var map_zoom := 1.0
-var map_pan := Vector2.ZERO
+var map_camera := IDMMapCamera.new()
+var followed_rider_id := -1
 var gesture_start := Vector2.ZERO
 var gesture_pan := Vector2.ZERO
 var pinch_distance := 0.0
+var touch_points: Dictionary = {}
+var pinch_active := false
 var suppress_tap := false
 var zoom_label: Label
 var world_map := false
@@ -64,6 +70,7 @@ var ui_scale := 1.0
 
 func _ready() -> void:
 	geographic_map_available = geographic_service.load_data()
+	road_network_available = road_router.load_network()
 	_load_map_texture()
 	_load_active_save_path()
 	_load_game()
@@ -105,18 +112,51 @@ func _set_active_save_path(path: String) -> void:
 		marker.store_string(JSON.stringify({"path": path}))
 
 func _process(delta: float) -> void:
-	if paused or save_recovery_required:
+	if save_recovery_required:
 		return
-	elapsed += delta * speed
-	if elapsed >= ORDER_INTERVAL:
-		elapsed = 0.0
-		_spawn_order()
-	for rider in riders:
-		if rider["status"] == "busy":
-			rider["remaining"] -= delta * speed
-			if rider["remaining"] <= 0:
-				_finish_delivery(rider)
-	_save_game()
+	if not paused:
+		elapsed += delta * speed
+		if elapsed >= ORDER_INTERVAL:
+			elapsed = 0.0
+			_spawn_order()
+		for rider in riders:
+			if rider.get("status", "") != "busy":
+				continue
+			var rider_id := int(rider.get("id", -1))
+			if route_simulations.has(rider_id):
+				var simulation: IDMRouteSimulation = route_simulations[rider_id]
+				var events := simulation.advance(delta, float(speed))
+				rider["position"] = simulation.current_uv
+				rider["remaining"] = simulation.estimated_remaining_seconds(float(speed))
+				rider["route_state"] = simulation.to_save()
+				if geographic_map_available and not legacy_map_mode:
+					var current_geo := geographic_service.uv_to_geo(rider["position"])
+					rider["latitude"] = current_geo.y
+					rider["longitude"] = current_geo.x
+				for route_event in events:
+					var active_order := _find_order(int(rider.get("order_id", -1)))
+					if route_event == "reached_pickup" and not active_order.is_empty():
+						active_order["status"] = "On route to delivery"
+						status_label.text = "Partner %02d collected the parcel" % rider_id
+					elif route_event == "delivered":
+						_finish_delivery(rider)
+			elif legacy_map_mode:
+				# Retain progress for pre-geography saves in their original fictional coordinate space.
+				rider["remaining"] = float(rider.get("remaining", TRAVEL_SECONDS)) - delta * speed
+				if rider["remaining"] <= 0.0:
+					_finish_delivery(rider)
+	if map_camera.follow_enabled and followed_rider_id >= 0:
+		var followed_rider := _find_rider(followed_rider_id)
+		if followed_rider.is_empty():
+			map_camera.follow_enabled = false
+			followed_rider_id = -1
+		else:
+			map_camera.update_follow(delta, followed_rider["position"], _map_content_rect(map_view.size), map_view.size)
+	if not paused:
+		autosave_elapsed += delta
+		if autosave_elapsed >= 1.0:
+			autosave_elapsed = 0.0
+			_save_game()
 	_refresh_map()
 
 func _build_ui() -> void:
@@ -283,12 +323,16 @@ func _label(text: String, size: int, color: String) -> Label:
 func _layout_ui() -> void:
 	if not is_instance_valid(map_view) or not is_instance_valid(sheet) or not is_instance_valid(bottom_nav):
 		return
+	var previous_viewport := viewport_size
+	var previous_map_rect := _map_content_rect(previous_viewport)
 	var window := get_window()
 	if window.size.x > 0 and window.size.y > 0:
 		window.content_scale_size = window.size
 	viewport_size = Vector2(window.size)
 	if viewport_size.x <= 0 or viewport_size.y <= 0:
 		viewport_size = get_viewport_rect().size
+	if previous_viewport != viewport_size:
+		map_camera.viewport_changed(previous_viewport, viewport_size, previous_map_rect, _map_content_rect(viewport_size))
 	ui_scale = clampf(minf(viewport_size.x / 390.0, viewport_size.y / 844.0), 1.0, 1.15)
 	safe_insets = _read_safe_insets()
 	var is_landscape := viewport_size.x > viewport_size.y
@@ -317,13 +361,15 @@ func _layout_ui() -> void:
 	sim_controls.offset_right = safe_left + 306
 	sim_controls.offset_bottom = safe_top + 134
 
-	var controls_on_left := is_landscape and sheet_expanded
+	# The compact landscape sheet sits over the right side of the map. Keep
+	# zoom/recenter controls on the left in both compact and expanded states.
+	var controls_on_left := is_landscape
 	map_controls.columns = 1
 	map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT if controls_on_left else Control.PRESET_TOP_RIGHT)
 	map_controls.offset_left = safe_left + 12 if controls_on_left else -safe_right - 84
 	map_controls.offset_right = safe_left + 84 if controls_on_left else -safe_right - 12
-	map_controls.offset_top = safe_top + 132
-	map_controls.offset_bottom = safe_top + 284
+	map_controls.offset_top = safe_top + 148
+	map_controls.offset_bottom = safe_top + 300
 
 	bottom_nav.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	if is_desktop:
@@ -371,7 +417,7 @@ func _layout_ui() -> void:
 			if order_list.get_child_count() > 0:
 				order_list.get_child(0).visible = true
 	if is_instance_valid(status_label):
-		var active_map_order: bool = selected_tab == "Map" and not selected.is_empty() and selected["status"] in ["Waiting", "On route"]
+		var active_map_order: bool = selected_tab == "Map" and not selected.is_empty() and (selected["status"] == "Waiting" or str(selected["status"]).begins_with("On route"))
 		status_label.visible = status_label.text != "" and (sheet_expanded or selected_tab == "Map") and not active_map_order
 	for tab in nav_buttons:
 		var nav_button: Button = nav_buttons[tab]
@@ -406,29 +452,51 @@ func _sheet_title() -> String:
 		"Finance": return "COMPANY FINANCES"
 		_: return "SETTINGS  ·  " + selected_subtab.to_upper()
 
-func _zoom_map(factor: float) -> void:
-	var center := map_view.size * 0.5
-	var world_center := (center - map_pan) / map_zoom
-	map_zoom = clampf(map_zoom * factor, 0.65, 2.5)
-	map_pan = center - world_center * map_zoom
-	_clamp_map_pan()
+func _zoom_map(factor: float, screen_point: Vector2 = Vector2(-1.0, -1.0)) -> void:
+	if not is_instance_valid(map_view):
+		return
+	var anchor := map_view.size * 0.5 if screen_point.x < 0.0 or screen_point.y < 0.0 else screen_point
+	map_camera.zoom_at(factor, anchor, map_view.size)
 	map_view.queue_redraw()
 
 func _clamp_map_pan() -> void:
-	map_pan.x = clampf(map_pan.x, -map_view.size.x * 0.8, map_view.size.x * 0.8)
-	map_pan.y = clampf(map_pan.y, -map_view.size.y * 0.8, map_view.size.y * 0.8)
+	map_camera.clamp_pan(map_view.size)
 
 func _recenter_map() -> void:
-	map_pan = Vector2.ZERO
-	map_zoom = 1.0
+	map_camera.recenter()
+	followed_rider_id = -1
 	map_view.queue_redraw()
+
+func _toggle_follow(rider_id: int) -> void:
+	if followed_rider_id == rider_id and map_camera.follow_enabled:
+		map_camera.follow_enabled = false
+		followed_rider_id = -1
+		status_label.text = "Follow camera off"
+		_refresh()
+		return
+	var rider := _find_rider(rider_id)
+	if rider.is_empty():
+		return
+	followed_rider_id = rider_id
+	map_camera.set_follow(true, rider["position"], _map_content_rect(map_view.size), map_view.size)
+	status_label.text = "Following partner %02d · pan map to stop" % rider_id
+	map_view.queue_redraw()
+	_refresh()
+
+func _find_rider(rider_id: int) -> Dictionary:
+	for rider in riders:
+		if int(rider.get("id", -1)) == rider_id:
+			return rider
+	return {}
 
 func _toggle_world() -> void:
 	world_map = not world_map
 	selected_subtab = "World" if world_map else "City"
 	map_mode = selected_subtab
-	map_zoom = 0.7 if world_map else 1.0
-	map_pan = Vector2.ZERO
+	map_camera.zoom = 0.7 if world_map else 1.0
+	map_camera.pan = Vector2.ZERO
+	map_camera.follow_enabled = false
+	followed_rider_id = -1
 	status_label.text = "World overview" if world_map else "City map"
 	_refresh()
 
@@ -438,8 +506,10 @@ func _set_subtab(name: String) -> void:
 	if selected_tab == "Map":
 		map_mode = name
 		world_map = name == "World"
-		map_zoom = 0.7 if world_map else 1.0
-		map_pan = Vector2.ZERO
+		map_camera.zoom = 0.7 if world_map else 1.0
+		map_camera.pan = Vector2.ZERO
+		map_camera.follow_enabled = false
+		followed_rider_id = -1
 		map_view.queue_redraw()
 		status_label.text = name + " map"
 	else:
@@ -463,51 +533,88 @@ func _toggle_sheet() -> void:
 func _on_map_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		if event.pressed:
-			gesture_start = event.position
-			gesture_pan = map_pan
-			suppress_tap = false
-		elif not suppress_tap:
-			var now := Time.get_ticks_msec()
-			if now - last_tap_msec < 320:
-				_zoom_map(1.4)
-			else:
-				_select_marker(event.position)
-			last_tap_msec = now
+			touch_points[event.index] = event.position
+			if touch_points.size() == 1:
+				gesture_start = event.position
+				gesture_pan = map_camera.pan
+				suppress_tap = false
+			elif touch_points.size() == 2:
+				var points: Array = touch_points.values()
+				pinch_distance = Vector2(points[0]).distance_to(Vector2(points[1]))
+				pinch_active = true
+				suppress_tap = true
+				_stop_follow_for_manual_gesture()
+		else:
+			touch_points.erase(event.index)
+			if pinch_active:
+				pinch_active = false
+				pinch_distance = 0.0
+				suppress_tap = true
+			elif touch_points.is_empty() and not suppress_tap:
+				var now := Time.get_ticks_msec()
+				if now - last_tap_msec < 320:
+					_zoom_map(1.4, event.position)
+				else:
+					_select_marker(event.position)
+				last_tap_msec = now
+			if touch_points.size() == 1:
+				var remaining_point: Vector2 = touch_points.values()[0]
+				gesture_start = remaining_point
+				gesture_pan = map_camera.pan
+				suppress_tap = true
 	elif event is InputEventScreenDrag:
-		if event.position.distance_to(gesture_start) > 8:
+		if touch_points.has(event.index):
+			touch_points[event.index] = event.position
+		if touch_points.size() >= 2:
+			var points: Array = touch_points.values()
+			var new_distance := Vector2(points[0]).distance_to(Vector2(points[1]))
+			var pinch_center := (Vector2(points[0]) + Vector2(points[1])) * 0.5
+			if pinch_distance > 0.0 and new_distance > 0.0:
+				_zoom_map(new_distance / pinch_distance, pinch_center)
+			pinch_distance = new_distance
+			pinch_active = true
 			suppress_tap = true
-		map_pan = gesture_pan + event.position - gesture_start
-		_clamp_map_pan()
-		map_view.queue_redraw()
+		elif event.position.distance_to(gesture_start) > 8.0:
+			suppress_tap = true
+			_stop_follow_for_manual_gesture()
+			map_camera.pan = gesture_pan + event.position - gesture_start
+			_clamp_map_pan()
+			map_view.queue_redraw()
 	elif event is InputEventMagnifyGesture:
-		_zoom_map(event.factor)
+		_zoom_map(event.factor, event.position)
 	elif event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.double_click:
-			_zoom_map(1.4)
+			_zoom_map(1.4, event.position)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
-			_zoom_map(1.15)
+			_zoom_map(1.15, event.position)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
-			_zoom_map(0.87)
+			_zoom_map(0.87, event.position)
 		elif event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				gesture_start = event.position
-				gesture_pan = map_pan
+				gesture_pan = map_camera.pan
 				suppress_tap = false
 			elif not suppress_tap:
 				_select_marker(event.position)
 	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-		if event.position.distance_to(gesture_start) > 8:
+		if event.position.distance_to(gesture_start) > 8.0:
 			suppress_tap = true
-		map_pan = gesture_pan + event.position - gesture_start
-		_clamp_map_pan()
-		map_view.queue_redraw()
+			_stop_follow_for_manual_gesture()
+			map_camera.pan = gesture_pan + event.position - gesture_start
+			_clamp_map_pan()
+			map_view.queue_redraw()
+
+func _stop_follow_for_manual_gesture() -> void:
+	if map_camera.follow_enabled:
+		map_camera.follow_enabled = false
+		followed_rider_id = -1
 
 func _select_marker(point: Vector2) -> void:
 	var map_rect := _map_content_rect(map_view.size)
 	for order in orders:
 		if order["status"] == "Waiting":
 			var destination: Vector2 = map_rect.position + order["destination"] * map_rect.size
-			var screen_destination := destination * map_zoom + map_pan
+			var screen_destination := map_camera.world_to_screen(order["destination"], map_rect)
 			if point.distance_to(screen_destination) < 30:
 				selected_order = order["id"]
 				sheet_expanded = true
@@ -584,62 +691,181 @@ func _spawn_order() -> void:
 		max_x = 0.52
 		min_y = 0.34
 		max_y = 0.74
-	var destination := geographic_service.random_road_location(get_viewport_rect().size) if geographic_map_available and not legacy_map_mode else Vector2(randf_range(min_x, max_x), randf_range(min_y, max_y))
-	for attempt in 10:
-		var overlaps := false
-		for existing in orders:
-			if existing["status"] != "Delivered" and destination.distance_to(existing["destination"]) < 0.16:
-				overlaps = true
+	var pickup := Vector2.ZERO
+	var destination := Vector2.ZERO
+	var dropoff_route: Dictionary = {}
+	if geographic_map_available and not legacy_map_mode:
+		if not road_network_available:
+			status_label.text = road_router.last_error if road_router.last_error != "" else "Road routing data is unavailable"
+			return
+		for attempt in 20:
+			pickup = road_router.random_location_for_view(viewport_size)
+			destination = _random_order_location(viewport_size)
+			if destination.x < 0.0:
+				continue
+			if pickup.distance_to(destination) < 0.025:
+				continue
+			dropoff_route = road_router.route_between_uv(pickup, destination)
+			if dropoff_route.get("ok", false) and _has_reachable_partner(pickup):
 				break
-		if not overlaps:
+		if not dropoff_route.get("ok", false) or not _has_reachable_partner(pickup):
+			status_label.text = "No connected road job is available in this area yet"
+			return
+	else:
+		pickup = Vector2(randf_range(min_x, max_x), randf_range(min_y, max_y))
+		destination = Vector2(randf_range(min_x, max_x), randf_range(min_y, max_y))
+	var duplicate_point := false
+	for existing in orders:
+		if existing["status"] != "Delivered" and destination.distance_to(existing["destination"]) < 0.06:
+			duplicate_point = true
 			break
-		destination = geographic_service.random_road_location(get_viewport_rect().size) if geographic_map_available and not legacy_map_mode else Vector2(randf_range(min_x, max_x), randf_range(min_y, max_y))
-	orders.append({
+	if duplicate_point and geographic_map_available and not legacy_map_mode:
+		for attempt in 20:
+			pickup = road_router.random_location_for_view(viewport_size)
+			destination = _random_order_location(viewport_size)
+			if destination.x < 0.0:
+				continue
+			if pickup.distance_to(destination) >= 0.025:
+				dropoff_route = road_router.route_between_uv(pickup, destination)
+				if dropoff_route.get("ok", false) and _has_reachable_partner(pickup):
+					duplicate_point = false
+					for existing in orders:
+						if existing["status"] != "Delivered" and destination.distance_to(existing["destination"]) < 0.06:
+							duplicate_point = true
+							break
+					if not duplicate_point:
+						break
+	if duplicate_point:
+		return
+	var order := {
 		"id": next_order_id,
+		"pickup": pickup,
 		"destination": destination,
+		"pickup_latitude": geographic_service.uv_to_geo(pickup).y if geographic_map_available and not legacy_map_mode else null,
+		"pickup_longitude": geographic_service.uv_to_geo(pickup).x if geographic_map_available and not legacy_map_mode else null,
 		"destination_latitude": geographic_service.uv_to_geo(destination).y if geographic_map_available and not legacy_map_mode else null,
 		"destination_longitude": geographic_service.uv_to_geo(destination).x if geographic_map_available and not legacy_map_mode else null,
 		"coordinate_reference": "EPSG:4326" if geographic_map_available and not legacy_map_mode else "legacy_normalized",
 		"payout": randi_range(55, 105),
 		"status": "Waiting",
 		"rider": -1,
-	})
+		"route_distance_km": float(dropoff_route.get("distance_km", 0.0)),
+		"route_eta_seconds": float(dropoff_route.get("estimated_time_seconds", 0.0)),
+	}
+	orders.append(order)
 	next_order_id += 1
 	_save_game()
 	_refresh()
 
+func _random_order_location(view_size: Vector2) -> Vector2:
+	# Keep new parcel pins clear of the HUD, simulation buttons, compact map
+	# panels, map controls, and bottom navigation. In landscape the panel is at
+	# the right, so jobs remain visible and tappable on the map's left side.
+	for _attempt in 128:
+		var candidate := road_router.random_location_for_view(view_size)
+		if candidate.x < 0.0:
+			return candidate
+		var point := map_camera.world_to_screen(candidate, _map_content_rect(view_size))
+		if point.x < 24.0 or point.x > view_size.x - 24.0 or point.y < 72.0 or point.y > view_size.y - 84.0:
+			continue
+		if point.y < 144.0 and point.x < 320.0:
+			continue
+		if view_size.x > view_size.y:
+			if point.x < 104.0 and point.y >= 144.0 and point.y <= 312.0:
+				continue
+			var sheet_top := 84.0 if sheet_expanded else view_size.y - 256.0
+			if point.x >= view_size.x - 378.0 and point.y >= sheet_top:
+				continue
+		else:
+			if point.x >= view_size.x - 96.0 and point.y >= 136.0 and point.y <= 304.0:
+				continue
+			var portrait_sheet_height := 354.0 if sheet_expanded else 244.0
+			if point.y >= view_size.y - portrait_sheet_height:
+				continue
+		return candidate
+	return Vector2(-1.0, -1.0)
+
+func _has_reachable_partner(pickup_uv: Vector2) -> bool:
+	for partner in riders:
+		if partner.get("status", "") != "ready":
+			continue
+		var candidate := road_router.route_between_uv(partner["position"], pickup_uv)
+		if candidate.get("ok", false):
+			return true
+	return false
+
 func _dispatch(order_id: int) -> void:
 	var order := _find_order(order_id)
-	if order.is_empty() or order["status"] != "Waiting":
+	if order.is_empty() or order.get("status", "") != "Waiting":
 		return
 	var available := -1
-	for index in riders.size():
-		if riders[index]["status"] == "ready":
+	var simulation: IDMRouteSimulation
+	if geographic_map_available and not legacy_map_mode:
+		if not road_network_available:
+			status_label.text = road_router.last_error if road_router.last_error != "" else "Road routes unavailable; dispatch was not started"
+			return
+		var pickup_uv: Vector2 = _as_vector2(order.get("pickup", ""), order["destination"])
+		var destination_uv: Vector2 = order["destination"]
+		var dropoff_route := road_router.route_between_uv(pickup_uv, destination_uv)
+		if not dropoff_route.get("ok", false):
+			status_label.text = "Delivery route failed: %s" % dropoff_route.get("error", "unreachable road")
+			return
+		var pickup_error := "No ready partner can reach this pickup by road."
+		for index in riders.size():
+			if riders[index].get("status", "") != "ready":
+				continue
+			var candidate_pickup := road_router.route_between_uv(riders[index]["position"], pickup_uv)
+			if not candidate_pickup.get("ok", false):
+				pickup_error = str(candidate_pickup.get("error", pickup_error))
+				continue
+			var candidate_simulation := IDMRouteSimulation.new()
+			if not candidate_simulation.initialize(candidate_pickup, dropoff_route, 25.0):
+				pickup_error = candidate_simulation.error_message
+				continue
 			available = index
+			simulation = candidate_simulation
 			break
-	if available < 0:
-		status_label.text = "No rider available"
-		return
+		if available < 0 or simulation == null:
+			status_label.text = "Dispatch unavailable: %s" % pickup_error
+			return
+	else:
+		for index in riders.size():
+			if riders[index].get("status", "") == "ready":
+				available = index
+				break
+		if available < 0:
+			status_label.text = "No partner available"
+			return
 	var rider: Dictionary = riders[available]
+	var rider_id := int(rider["id"])
+	if simulation != null:
+		route_simulations[rider_id] = simulation
+		rider["route_state"] = simulation.to_save()
+		rider["position"] = simulation.current_uv
+		rider["remaining"] = simulation.estimated_remaining_seconds(float(speed))
+		order["route_distance_km"] = simulation.total_distance_km()
+		order["route_eta_seconds"] = simulation.estimated_remaining_seconds(float(speed))
+		order["status"] = "On route to pickup"
+		status_label.text = "Partner %02d dispatched · %.1f km road route" % [rider_id, simulation.total_distance_km()]
+	else:
+		# Preserve old prototype trips only inside legacy saves and their fictional coordinate space.
+		rider["remaining"] = TRAVEL_SECONDS
+		order["origin"] = rider["position"]
+		order["status"] = "On route"
+		status_label.text = "Rider %02d dispatched on legacy route" % rider_id
 	rider["status"] = "busy"
 	rider["order_id"] = order_id
-	rider["remaining"] = TRAVEL_SECONDS
-	order["origin"] = rider["position"]
-	if geographic_map_available and not legacy_map_mode:
-		var origin_geo := geographic_service.uv_to_geo(rider["position"])
-		order["origin_latitude"] = origin_geo.y
-		order["origin_longitude"] = origin_geo.x
-	order["status"] = "On route"
-	order["rider"] = rider["id"]
+	order["rider"] = rider_id
 	selected_order = order_id
-	status_label.text = "Rider %02d dispatched · road routing pending" % rider["id"] if geographic_map_available and not legacy_map_mode else "Rider %02d dispatched" % rider["id"]
 	_save_game()
 	_refresh()
 
 func _finish_delivery(rider: Dictionary) -> void:
 	var order := _find_order(rider["order_id"])
-	if order.is_empty():
+	if order.is_empty() or order.get("status", "") == "Delivered":
 		rider["status"] = "ready"
+		rider["order_id"] = -1
+		route_simulations.erase(int(rider.get("id", -1)))
 		return
 	var payout: float = order["payout"]
 	var operating_cost := 18.0
@@ -651,6 +877,9 @@ func _finish_delivery(rider: Dictionary) -> void:
 	order["delivered_at"] = Time.get_unix_time_from_system()
 	rider["status"] = "ready"
 	rider["order_id"] = -1
+	rider.erase("route_state")
+	rider["position"] = order["destination"]
+	route_simulations.erase(int(rider.get("id", -1)))
 	status_label.text = "Delivered  +RM%d  ·  cost RM%d" % [payout, operating_cost]
 	# Return control to the map after a completed stop; keep the outcome visible in the compact sheet.
 	sheet_expanded = false
@@ -662,7 +891,12 @@ func _hire_rider() -> void:
 		status_label.text = "Need RM120 to recruit partner"
 		return
 	cash -= 120
-	riders.append({"id": next_rider_id, "status": "ready", "order_id": -1, "remaining": 0.0, "position": Vector2(0.5, 0.5)})
+	var new_position := road_router.random_location_for_view(get_viewport_rect().size) if geographic_map_available and not legacy_map_mode and road_network_available else Vector2(0.5, 0.5)
+	if geographic_map_available and not legacy_map_mode and (not road_network_available or new_position.x < 0.0):
+		cash += 120
+		status_label.text = "No connected road recruitment location is available"
+		return
+	riders.append({"id": next_rider_id, "status": "ready", "order_id": -1, "remaining": 0.0, "position": new_position})
 	next_rider_id += 1
 	status_label.text = "Rider hired and ready"
 	_save_game()
@@ -672,6 +906,7 @@ func _toggle_pause() -> void:
 	paused = not paused
 	pause_button.text = "Resume" if paused else "Pause"
 	status_label.text = "Simulation paused" if paused else "Operations resumed"
+	_save_game()
 
 func _set_speed(value: int) -> void:
 	speed = value
@@ -679,6 +914,7 @@ func _set_speed(value: int) -> void:
 	for factor in speed_buttons:
 		var button: Button = speed_buttons[factor]
 		button.modulate = Color("#69e4fa") if factor == speed else Color.WHITE
+	_save_game()
 
 func _find_order(order_id: int) -> Dictionary:
 	for order in orders:
@@ -717,8 +953,11 @@ func _refresh() -> void:
 		"Map":
 			var selected := _find_order(selected_order)
 			if not selected.is_empty() and selected["status"] == "Waiting":
-				var detail := _label("PARCEL %03d" % selected["id"], 13, "#91a8ba")
-				order_list.add_child(detail)
+				if float(selected.get("route_distance_km", 0.0)) > 0.0:
+					var eta_minutes := int(ceil(float(selected.get("route_eta_seconds", 0.0)) / 60.0))
+					order_list.add_child(_label("PARCEL %03d  ·  %.1f km road route  ·  ~%d min" % [selected["id"], float(selected["route_distance_km"]), eta_minutes], 13, "#a8bac8"))
+				else:
+					order_list.add_child(_label("PARCEL %03d" % selected["id"], 13, "#91a8ba"))
 				var payout := _label("RM%d delivery payout" % selected["payout"], 20, "#f1f6fa")
 				payout.add_theme_font_size_override("font_size", int(round(20.0 * ui_scale)))
 				order_list.add_child(payout)
@@ -730,12 +969,19 @@ func _refresh() -> void:
 				dispatch_style.set_corner_radius_all(15)
 				dispatch.add_theme_stylebox_override("normal", dispatch_style)
 				order_list.add_child(dispatch)
-			elif not selected.is_empty() and selected["status"] == "On route":
-				order_list.add_child(_label("PARCEL %03d  ·  ON ROUTE" % selected["id"], 16, "#f1f6fa"))
-				var route_notice := _label("Road routing is still in development; prototype travel continues.", 13, "#a8bac8")
-				route_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-				route_notice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				order_list.add_child(route_notice)
+			elif not selected.is_empty() and str(selected["status"]).begins_with("On route"):
+				order_list.add_child(_label("PARCEL %03d  ·  %s" % [selected["id"], str(selected["status"]).to_upper()], 15, "#f1f6fa"))
+				var route_rider_id := int(selected.get("rider", -1))
+				var route_sim: IDMRouteSimulation = route_simulations.get(route_rider_id)
+				if route_sim != null and route_sim.is_active():
+					var eta := route_sim.estimated_remaining_seconds(float(speed))
+					var eta_text := "ETA paused" if paused or eta < 0.0 else "ETA %d min" % int(ceil(eta / 60.0))
+					order_list.add_child(_label("%.1f km total  ·  %.1f km remaining  ·  %s" % [route_sim.total_distance_km(), route_sim.remaining_distance_km(), eta_text], 12, "#a8bac8"))
+					var follow_button := _button("Stop following" if map_camera.follow_enabled and followed_rider_id == route_rider_id else "Follow partner", func(): _toggle_follow(route_rider_id))
+					follow_button.custom_minimum_size.y = 42
+					order_list.add_child(follow_button)
+				else:
+					order_list.add_child(_label("The road route is being restored.", 13, "#a8bac8"))
 			else:
 				var waiting_count := _waiting_count()
 				var hint := _label("%d parcels waiting" % waiting_count if waiting_count > 0 else "Tap a parcel pin to review", 16, "#f1f6fa")
@@ -842,7 +1088,7 @@ func _draw_map() -> void:
 	if size.x <= 0 or size.y <= 0:
 		return
 	map_view.draw_rect(Rect2(Vector2.ZERO, size), ThemeService.color("map_background"))
-	map_view.draw_set_transform(map_pan, 0.0, Vector2(map_zoom, map_zoom))
+	map_view.draw_set_transform(map_camera.pan, 0.0, Vector2(map_camera.zoom, map_camera.zoom))
 	var map_rect := _map_content_rect(size)
 	if geographic_map_available and not legacy_map_mode and is_instance_valid(map_texture):
 		map_view.draw_texture_rect(map_texture, map_rect, false)
@@ -851,12 +1097,12 @@ func _draw_map() -> void:
 		for place in geographic_service.places:
 			var place_name := str(place.get("name", ""))
 			var place_type := str(place.get("type", ""))
-			if map_zoom < 1.25 and place_name not in major_places:
+			if map_camera.zoom < 1.25 and place_name not in major_places:
 				continue
-			if map_zoom >= 1.25 and place_type not in ["city", "town", "suburb", "quarter", "neighbourhood"]:
+			if map_camera.zoom >= 1.25 and place_type not in ["city", "town", "suburb", "quarter", "neighbourhood"]:
 				continue
 			var place_point: Vector2 = map_rect.position + place["uv"] * map_rect.size
-			var screen_point := place_point * map_zoom + map_pan
+			var screen_point := map_camera.world_to_screen(place["uv"], map_rect)
 			var label_width := ThemeDB.fallback_font.get_string_size(place_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
 			var screen_bounds := Rect2(screen_point + Vector2(3, -18), Vector2(label_width + 8, 20))
 			var label_bounds := Rect2(place_point + Vector2(3, -18), Vector2(label_width + 8, 20))
@@ -873,11 +1119,20 @@ func _draw_map() -> void:
 			drawn_label_rects.append(screen_bounds)
 			map_view.draw_rect(label_bounds, Color(0.02, 0.07, 0.10, 0.76))
 			map_view.draw_string(ThemeDB.fallback_font, place_point + Vector2(7, -4), place_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, ThemeService.color("text"))
-		map_view.draw_string(ThemeDB.fallback_font, Vector2(18, 155), "© OpenStreetMap contributors · KL/Selangor", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, ThemeService.color("map_label"))
+		var attribution_x := 108.0 if size.x > size.y else 18.0
+		map_view.draw_string(ThemeDB.fallback_font, Vector2(attribution_x, 155), "© OpenStreetMap contributors · KL/Selangor", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, ThemeService.color("map_label"))
 		if world_map:
 			map_view.draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.5 - 105, size.y * 0.24), "World map coverage is not available in this build.", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ThemeService.color("text"))
 	else:
 		_draw_fictional_map_background(size)
+	var selected_route_order := _find_order(selected_order)
+	var selected_sim: IDMRouteSimulation = route_simulations.get(int(selected_route_order.get("rider", -1))) if not selected_route_order.is_empty() else null
+	if selected_sim != null and selected_sim.is_active():
+		_draw_route_polyline(selected_sim.pickup_route.get("points", []), Color("#ffcf63"), 5.0, map_rect)
+		_draw_route_polyline(selected_sim.dropoff_route.get("points", []), Color("#39d5e8"), 5.0, map_rect)
+		var pickup_point: Vector2 = map_rect.position + selected_sim.pickup_route["points"][-1] * map_rect.size
+		map_view.draw_circle(pickup_point, 11.0, Color("#ffcf63"))
+		map_view.draw_string(ThemeDB.fallback_font, pickup_point + Vector2(-4, 4), "P", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#342307"))
 	for order in orders:
 		if order["status"] == "Delivered":
 			continue
@@ -887,30 +1142,25 @@ func _draw_map() -> void:
 		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), "P", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#06202a"))
 	for rider in riders:
 		var position: Vector2 = rider["position"]
-		if rider["status"] == "busy":
-			var order := _find_order(rider["order_id"])
-			if not order.is_empty():
-				var target: Vector2 = order["destination"]
-				var progress := clampf(1.0 - rider["remaining"] / TRAVEL_SECONDS, 0.0, 1.0)
-				var origin: Vector2 = order.get("origin", rider["position"])
-				position = origin.lerp(target, progress)
-				rider["position"] = position
-				if geographic_map_available and not legacy_map_mode:
-					var current_geo := geographic_service.uv_to_geo(position)
-					rider["latitude"] = current_geo.y
-					rider["longitude"] = current_geo.x
+		var route_sim: IDMRouteSimulation = route_simulations.get(int(rider.get("id", -1)))
+		if route_sim != null and route_sim.is_active():
+			position = route_sim.current_uv
 		var point := map_rect.position + position * map_rect.size
 		map_view.draw_circle(point, 17, ThemeService.color("rider_back"))
 		map_view.draw_circle(point, 12, ThemeService.color("rider"))
 		map_view.draw_string(ThemeDB.fallback_font, point + Vector2(-4, 5), "R", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#06202a"))
 	map_view.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
+func _draw_route_polyline(route_points: Array, color: Color, width: float, map_rect: Rect2) -> void:
+	if route_points.size() < 2:
+		return
+	var projected := PackedVector2Array()
+	for point in route_points:
+		projected.append(map_rect.position + Vector2(point) * map_rect.size)
+	map_view.draw_polyline(projected, color, width, true)
+
 func _map_content_rect(size: Vector2) -> Rect2:
-	if not geographic_map_available or legacy_map_mode:
-		return Rect2(Vector2.ZERO, size)
-	var fit := maxf(size.x / IDMGeographicService.TEXTURE_SIZE.x, size.y / IDMGeographicService.TEXTURE_SIZE.y)
-	var fitted := IDMGeographicService.TEXTURE_SIZE * fit
-	return Rect2((size - fitted) * 0.5, fitted)
+	return map_camera.content_rect(size, IDMGeographicService.TEXTURE_SIZE, geographic_map_available and not legacy_map_mode)
 
 func _draw_fictional_map_background(size: Vector2) -> void:
 	var columns := 7
@@ -995,16 +1245,41 @@ func _load_game() -> void:
 	if riders.is_empty():
 		save_recovery_required = true
 		return
+	route_simulations.clear()
 	for order in orders:
 		order["destination"] = _as_vector2(order.get("destination", ""), Vector2(0.5, 0.5))
+		if order.has("pickup"):
+			order["pickup"] = _as_vector2(order["pickup"], order["destination"])
+		elif geographic_map_available and not legacy_map_mode:
+			order["pickup"] = road_router.random_location_for_view(get_viewport_rect().size)
 	for rider in riders:
 		rider["position"] = _as_vector2(rider.get("position", ""), Vector2(0.5, 0.5))
 	for rider in riders:
-		if rider["status"] == "busy":
-			rider["remaining"] = minf(float(rider["remaining"]), TRAVEL_SECONDS)
-			var order := _find_order(rider["order_id"])
-			if not order.is_empty():
-				order["status"] = "On route"
+		if rider.get("status", "") != "busy":
+			continue
+		var order := _find_order(int(rider.get("order_id", -1)))
+		if order.is_empty():
+			rider["status"] = "ready"
+			rider["order_id"] = -1
+			continue
+		if legacy_map_mode:
+			rider["remaining"] = maxf(0.0, minf(float(rider.get("remaining", TRAVEL_SECONDS)), TRAVEL_SECONDS))
+			order["status"] = "On route"
+			continue
+		var saved_route: Variant = rider.get("route_state", {})
+		var simulation := IDMRouteSimulation.new()
+		if road_network_available and saved_route is Dictionary and simulation.restore(saved_route) and simulation.is_active():
+			route_simulations[int(rider["id"])] = simulation
+			rider["position"] = simulation.current_uv
+			rider["remaining"] = simulation.estimated_remaining_seconds(float(speed))
+			order["status"] = "On route to pickup" if simulation.phase == IDMRouteSimulation.PHASE_PICKUP else "On route to delivery"
+		else:
+			# Older geographic saves have no road geometry. Requeue the booking and free the partner instead of teleporting.
+			order["status"] = "Waiting"
+			order["rider"] = -1
+			rider["status"] = "ready"
+			rider["order_id"] = -1
+			rider.erase("route_state")
 
 func _as_vector2(value: Variant, fallback: Vector2) -> Vector2:
 	if value is Vector2:
@@ -1028,8 +1303,10 @@ func _new_game() -> void:
 	delivered = 0
 	orders.clear()
 	riders.clear()
+	route_simulations.clear()
+	followed_rider_id = -1
 	for index in STARTING_RIDERS:
-		var start_position := geographic_service.random_road_location(get_viewport_rect().size) if geographic_map_available else Vector2(0.5, 0.5)
+		var start_position := road_router.random_location_for_view(get_viewport_rect().size) if geographic_map_available and road_network_available else geographic_service.random_road_location(get_viewport_rect().size) if geographic_map_available else Vector2(0.5, 0.5)
 		var rider := {"id": next_rider_id, "status": "ready", "order_id": -1, "remaining": 0.0, "position": start_position}
 		if geographic_map_available:
 			var point_geo := geographic_service.uv_to_geo(start_position)
