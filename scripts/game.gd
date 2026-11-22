@@ -48,6 +48,7 @@ var brand_label: Label
 var available_label: Label
 var geographic_service := IDMGeographicService.new()
 var road_router := IDMRoadRouter.new()
+var simulation_clock := IDMSimulationClock.new()
 var route_simulations: Dictionary = {}
 var geographic_map_available := false
 var road_network_available := false
@@ -222,37 +223,11 @@ func _process(delta: float) -> void:
 		return
 	_update_browser_map(delta)
 	_flush_map_input_blockers()
-	if not paused:
-		elapsed += delta * speed
-		if elapsed >= ORDER_INTERVAL:
-			elapsed = 0.0
-			_spawn_order()
-		for rider in riders:
-			if rider.get("status", "") != "busy":
-				continue
-			var rider_id := int(rider.get("id", -1))
-			if route_simulations.has(rider_id):
-				var simulation: IDMRouteSimulation = route_simulations[rider_id]
-				var events := simulation.advance(delta, float(speed))
-				rider["position"] = simulation.current_uv
-				rider["remaining"] = simulation.estimated_remaining_seconds(float(speed))
-				rider["route_state"] = simulation.to_save()
-				if geographic_map_available and not legacy_map_mode:
-					var current_geo := geographic_service.uv_to_geo(rider["position"])
-					rider["latitude"] = current_geo.y
-					rider["longitude"] = current_geo.x
-				for route_event in events:
-					var active_order := _find_order(int(rider.get("order_id", -1)))
-					if route_event == "reached_pickup" and not active_order.is_empty():
-						active_order["status"] = "On route to delivery"
-						status_label.text = "Partner %02d collected the parcel" % rider_id
-					elif route_event == "delivered":
-						_finish_delivery(rider)
-			elif legacy_map_mode:
-				# Retain progress for pre-geography saves in their original fictional coordinate space.
-				rider["remaining"] = float(rider.get("remaining", TRAVEL_SECONDS)) - delta * speed
-				if rider["remaining"] <= 0.0:
-					_finish_delivery(rider)
+	simulation_clock.set_speed(speed)
+	simulation_clock.set_paused(paused)
+	var simulation_ticks := simulation_clock.advance(delta)
+	for _tick in range(simulation_ticks):
+		_advance_simulation_tick()
 	if map_camera.follow_enabled and followed_rider_id >= 0:
 		var followed_rider := _find_rider(followed_rider_id)
 		if followed_rider.is_empty():
@@ -274,10 +249,46 @@ func _process(delta: float) -> void:
 	_sync_geographic_overlays()
 	_refresh_map()
 
+func _advance_simulation_tick() -> void:
+	const STEP := IDMSimulationClock.FIXED_STEP_SECONDS
+	# Preserve excess elapsed time at high speeds instead of dropping it after a
+	# long frame or creating only one booking when several intervals passed.
+	elapsed += STEP
+	while elapsed >= ORDER_INTERVAL:
+		elapsed -= ORDER_INTERVAL
+		_spawn_order()
+	for rider in riders:
+		if rider.get("status", "") != "busy":
+			continue
+		var rider_id := int(rider.get("id", -1))
+		if route_simulations.has(rider_id):
+			var simulation: IDMRouteSimulation = route_simulations[rider_id]
+			var events := simulation.advance(STEP, 1.0)
+			rider["position"] = simulation.current_uv
+			rider["remaining"] = simulation.estimated_remaining_seconds(1.0)
+			rider["route_state"] = simulation.to_save()
+			if geographic_map_available and not legacy_map_mode:
+				var current_geo := geographic_service.uv_to_geo(rider["position"])
+				rider["latitude"] = current_geo.y
+				rider["longitude"] = current_geo.x
+			for route_event in events:
+				var active_order := _find_order(int(rider.get("order_id", -1)))
+				if route_event == "reached_pickup" and not active_order.is_empty():
+					active_order["status"] = "On route to delivery"
+					status_label.text = "Partner %02d collected the parcel" % rider_id
+				elif route_event == "delivered":
+					_finish_delivery(rider)
+		elif legacy_map_mode:
+			# Retain progress for pre-geography saves in their original fictional coordinate space.
+			rider["remaining"] = float(rider.get("remaining", TRAVEL_SECONDS)) - STEP
+			if rider["remaining"] <= 0.0:
+				_finish_delivery(rider)
+
 func _show_main_menu() -> void:
 	main_menu_active = true
 	menu_settings_open = false
 	paused = true
+	simulation_clock.set_paused(true)
 	_close_save_overlay()
 	_close_new_game_confirmation()
 	if is_instance_valid(return_menu_confirmation):
@@ -547,7 +558,7 @@ func _build_ui() -> void:
 	pause_button.custom_minimum_size = Vector2(ThemeService.control_width("pause"), ThemeService.control_height("compact"))
 	pause_button.tooltip_text = "Pause or resume the simulation"
 	sim_row.add_child(pause_button)
-	for multiplier in [1, 2, 5, 10]:
+	for multiplier in [1, 5, 10, 50, 100]:
 		var factor: int = multiplier
 		var speed_button := _button(str(factor) + "×", func(): _set_speed(factor))
 		speed_button.custom_minimum_size = Vector2(ThemeService.control_width("speed"), ThemeService.control_height("compact"))
@@ -773,8 +784,8 @@ func _layout_ui() -> void:
 	sim_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	sim_controls.offset_left = safe_left + 12 * ui_layout_scale
 	sim_controls.offset_top = safe_top + 64 * ui_layout_scale
-	var available_sim_width := maxf(252.0, viewport_size.x - safe_left - safe_right - 24.0 * ui_layout_scale)
-	sim_controls.offset_right = minf(safe_left + 286.0 * ui_layout_scale, safe_left + available_sim_width)
+	var available_sim_width := maxf(252.0, viewport_size.x - safe_left - safe_right - 16.0 * ui_layout_scale)
+	sim_controls.offset_right = minf(safe_left + 330.0 * ui_layout_scale, safe_left + available_sim_width)
 	sim_controls.offset_bottom = safe_top + 122 * ui_layout_scale
 	pause_button.custom_minimum_size = Vector2(ThemeService.control_width("pause") * ui_layout_scale, maxf(44.0, ThemeService.control_height("compact") * ui_layout_scale))
 	for speed_button in speed_buttons.values():
@@ -1756,12 +1767,15 @@ func _hire_rider() -> void:
 
 func _toggle_pause() -> void:
 	paused = not paused
+	simulation_clock.set_paused(paused)
 	pause_button.text = "Resume" if paused else "Pause"
 	status_label.text = "Simulation paused" if paused else "Operations resumed"
 	_update_sim_controls()
 	_save_game()
 
 func _set_speed(value: int) -> void:
+	if not simulation_clock.set_speed(value):
+		return
 	speed = value
 	status_label.text = "Simulation speed: %d×" % speed
 	_update_sim_controls()
@@ -2022,6 +2036,7 @@ func _continue_game() -> void:
 		main_menu_active = false
 	game_session_started = true
 	paused = false
+	simulation_clock.set_paused(false)
 	_set_map_dom_visible(true)
 	map_view.visible = true
 	hud.visible = true
@@ -2101,6 +2116,7 @@ func _start_new_geographic_game() -> void:
 	main_menu_active = false
 	game_session_started = true
 	paused = false
+	simulation_clock.set_paused(false)
 	_set_map_dom_visible(true)
 	map_view.visible = true
 	hud.visible = true
@@ -2224,6 +2240,7 @@ func _load_save_profile(path: String) -> void:
 	main_menu_active = false
 	game_session_started = true
 	paused = false
+	simulation_clock.set_paused(false)
 	_set_map_dom_visible(true)
 	map_view.visible = true
 	hud.visible = true
@@ -2498,7 +2515,8 @@ func _load_game() -> void:
 	next_rider_id = int(data.get("next_rider_id", 1))
 	elapsed = float(data.get("elapsed", 0))
 	var loaded_speed := int(data.get("speed", 1))
-	speed = 5 if loaded_speed == 4 else loaded_speed if loaded_speed in [1, 2, 5, 10] else 1
+	speed = IDMSimulationClock.normalize_saved_speed(loaded_speed)
+	simulation_clock.set_speed(speed)
 	orders.assign(data.get("orders", []))
 	riders.assign(data.get("riders", []))
 	if riders.is_empty():
@@ -2570,7 +2588,11 @@ func _new_game(persist: bool = true) -> void:
 	next_order_id = 1
 	next_rider_id = 1
 	speed = 1
+	simulation_clock.set_speed(speed)
+	simulation_clock.clear_accumulator()
+	simulation_clock.simulation_seconds = 0.0
 	paused = false
+	simulation_clock.set_paused(false)
 	selected_order = -1
 	sheet_expanded = false
 	selected_tab = "Map"

@@ -63,8 +63,11 @@ func _run() -> void:
 	var rider: Dictionary = game.get("riders").filter(func(item: Dictionary) -> bool: return int(item["id"]) == rider_id)[0]
 	var saved_route: Dictionary = rider.get("route_state", {})
 	_check(saved_route.get("pickup_route", {}).get("points", []).size() >= 2 and saved_route.get("dropoff_route", {}).get("points", []).size() >= 2, "dispatch stores current-to-pickup and pickup-to-dropoff road geometry")
-	game.set("speed", 10)
-	game.call("_process", 10000.0)
+	game.call("_set_speed", 100)
+	for _frame in 1000:
+		if str(game.call("_find_order", order_id).get("status", "")) == "Delivered":
+			break
+		game.call("_process", 0.016)
 	orders = game.get("orders")
 	order = orders.filter(func(item: Dictionary) -> bool: return int(item["id"]) == order_id)[0]
 	rider = game.get("riders").filter(func(item: Dictionary) -> bool: return int(item["id"]) == rider_id)[0]
