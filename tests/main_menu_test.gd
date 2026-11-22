@@ -27,8 +27,9 @@ func _run() -> void:
 	_check(speed_buttons.keys().size() == 5 and speed_buttons.has(1) and speed_buttons.has(5) and speed_buttons.has(10) and speed_buttons.has(50) and speed_buttons.has(100) and not speed_buttons.has(2), "speed selector exposes exactly 1x, 5x, 10x, 50x and 100x")
 	var labels := _all_text(menu)
 	_check(labels.has("IDLE DELIVERY MANAGER"), "main menu uses the approved game title")
-	_check(labels.has("UR Trade Network"), "main menu shows the approved company name")
 	_check(labels.has("Created by UphyRaop"), "main menu shows the approved creator credit")
+	_check(labels.has("© 2026 UR Trade Network. All rights reserved."), "main menu shows the required copyright")
+	_check(not labels.has("UR Trade Network"), "main menu does not add a duplicate publisher line above the creator credit")
 	for required in ["New Game", "Continue", "Load Game", "Settings"]:
 		_check(labels.has(required), "main menu exposes %s" % required)
 	var elapsed_before := float(game.get("elapsed"))

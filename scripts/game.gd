@@ -342,13 +342,26 @@ func _render_main_menu() -> void:
 		column.add_child(back)
 		return
 	var badge := CenterContainer.new()
-	badge.custom_minimum_size.y = (30 if compact else 48) * ui_layout_scale
+	badge.custom_minimum_size.y = 56 * ui_layout_scale
 	column.add_child(badge)
-	var mark := Label.new()
-	mark.text = "UR"
-	mark.add_theme_font_size_override("font_size", int(round((19 if compact else 23) * ui_scale)))
-	mark.add_theme_color_override("font_color", Color("#45d9ec"))
-	badge.add_child(mark)
+	var mark_panel := PanelContainer.new()
+	mark_panel.custom_minimum_size = Vector2(54, 54) * ui_layout_scale
+	var mark_style := StyleBoxFlat.new()
+	mark_style.bg_color = Color("#113b48")
+	mark_style.border_color = Color("#28798a")
+	mark_style.set_border_width_all(1)
+	mark_style.set_corner_radius_all(16)
+	mark_style.content_margin_left = 0
+	mark_style.content_margin_right = 0
+	mark_style.content_margin_top = 0
+	mark_style.content_margin_bottom = 0
+	mark_panel.add_theme_stylebox_override("panel", mark_style)
+	badge.add_child(mark_panel)
+	var mark := Control.new()
+	mark.custom_minimum_size = Vector2(42, 42) * ui_layout_scale
+	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mark.draw.connect(func(): _draw_delivery_truck_symbol(mark))
+	mark_panel.add_child(mark)
 	var title := _label("IDLE DELIVERY MANAGER", 19 if compact else 22, "#f1f6fa")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -364,15 +377,35 @@ func _render_main_menu() -> void:
 	column.add_child(continue_button)
 	column.add_child(_menu_button("Load Game", _show_load_game, false))
 	column.add_child(_menu_button("Settings", _open_menu_settings, false))
-	var spacer := Control.new()
-	spacer.custom_minimum_size.y = 3
-	column.add_child(spacer)
-	var company := _label("UR Trade Network", 12, "#a8bac8")
-	company.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	column.add_child(company)
 	var creator := _label("Created by UphyRaop", 11, "#8199aa")
 	creator.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	column.add_child(creator)
+	var copyright := _label("© 2026 UR Trade Network. All rights reserved.", 10, "#8199aa")
+	copyright.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	copyright.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(copyright)
+
+func _draw_delivery_truck_symbol(icon: Control) -> void:
+	if not is_instance_valid(icon):
+		return
+	var scale := minf(icon.size.x / 38.0, icon.size.y / 38.0)
+	var origin := (icon.size - Vector2(38, 38) * scale) * 0.5
+	icon.draw_set_transform(origin, 0.0, Vector2.ONE * scale)
+	var cyan := Color("#55d9e8")
+	var outline := Color("#55d9e8")
+	for segment in [
+		[Vector2(4, 12), Vector2(22, 12)], [Vector2(22, 12), Vector2(22, 25)],
+		[Vector2(22, 25), Vector2(5, 25)], [Vector2(5, 25), Vector2(5, 12)],
+		[Vector2(22, 17), Vector2(29, 17)], [Vector2(29, 17), Vector2(34, 22)],
+		[Vector2(34, 22), Vector2(34, 25)], [Vector2(22, 25), Vector2(34, 25)],
+		[Vector2(25, 19), Vector2(28, 19)], [Vector2(28, 19), Vector2(31, 22)],
+	]:
+		icon.draw_line(segment[0], segment[1], outline, 2.2, true)
+	icon.draw_circle(Vector2(11, 26), 3.2, cyan)
+	icon.draw_circle(Vector2(29, 26), 3.2, cyan)
+	icon.draw_circle(Vector2(11, 26), 1.2, Color("#113b48"))
+	icon.draw_circle(Vector2(29, 26), 1.2, Color("#113b48"))
+	icon.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _menu_button(text: String, callback: Callable, primary: bool) -> Button:
 	var button := _button(text, callback)

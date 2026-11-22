@@ -114,8 +114,8 @@ loader_css = '''
 .idm-loader-mark { display: grid; width: 58px; height: 58px; margin: 0 auto 20px; place-items: center; border: 1px solid #28798a; border-radius: 18px; background: #113b48; color: #55d9e8; }
 .idm-loader-title { margin: 0; font-size: clamp(18px, 5vw, 22px); line-height: 1.25; letter-spacing: .045em; font-weight: 750; }
 .idm-loader-subtitle { margin: 10px 0 0; color: #55d9e8; font-size: 14px; }
-.idm-loader-company { margin: 25px 0 0; color: #b1c3cd; font-size: 12px; }
-.idm-loader-creator { margin: 6px 0 0; color: #839ba9; font-size: 11px; }
+.idm-loader-creator { margin: 25px 0 0; color: #b1c3cd; font-size: 12px; }
+.idm-loader-copyright { margin: 6px 0 0; color: #839ba9; font-size: 10px; line-height: 1.4; }
 .idm-progress-track { position: relative; height: 8px; margin: 28px 0 0; overflow: hidden; border-radius: 99px; background: #233b49; }
 .idm-progress-fill { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: inherit; background: linear-gradient(90deg, #25b5c9, #65e5ed); transition: width .16s ease-out; }
 #status[data-progress-mode="indeterminate"] .idm-progress-fill { left: 0; width: 36%; animation: idm-loader-sweep 1.3s ease-in-out infinite alternate; }
@@ -167,17 +167,17 @@ default_status = '''\t\t<div id="status">
 branded_status = '''\t\t<div id="status" data-progress-mode="indeterminate" data-status-mode="progress" role="status" aria-live="polite">
 \t\t\t<section class="idm-loader-card" aria-label="IDLE DELIVERY MANAGER loading">
 \t\t\t\t<div class="idm-loader-mark" aria-hidden="true">
-\t\t\t\t\t<svg width="34" height="34" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 24.5h24M8 20.5l5-8h8l5 8M12.5 24.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM24 24.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM17 12.5V7h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 7h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+\t\t\t\t\t<svg width="34" height="34" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 10h17v14H4zM21 15h6l4 5v4H21zM24 17v3h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="10" cy="25" r="2.5" fill="currentColor"/><circle cx="26" cy="25" r="2.5" fill="currentColor"/></svg>
 \t\t\t\t</div>
 \t\t\t\t<h1 class="idm-loader-title">IDLE DELIVERY MANAGER</h1>
-\t\t\t\t<p class="idm-loader-subtitle">Loading your logistics empire...</p>
+\t\t\t\t<p class="idm-loader-subtitle">Build Your Logistics Empire</p>
 \t\t\t\t<div class="idm-progress-track" aria-hidden="true"><div class="idm-progress-fill" id="idm-progress-fill"></div></div>
 \t\t\t\t<progress id="status-progress" class="idm-progress-accessible" aria-label="Game download progress"></progress>
 \t\t\t\t<p class="idm-loader-status" id="idm-loader-status">Preparing game files</p>
 \t\t\t\t<div id="status-notice" role="alert"></div>
 \t\t\t\t<button id="idm-loading-retry" type="button">Retry</button>
-\t\t\t\t<p class="idm-loader-company">UR Trade Network</p>
 \t\t\t\t<p class="idm-loader-creator">Created by UphyRaop</p>
+\t\t\t\t<p class="idm-loader-copyright">© 2026 UR Trade Network. All rights reserved.</p>
 \t\t\t</section>
 \t\t</div>'''
 if default_status not in html:
@@ -270,7 +270,7 @@ orientation_script = '''
 html = html.replace('</body>', orientation_script + '\n</body>')
 required_loader_tokens = [
     'IDLE DELIVERY MANAGER',
-    'Loading your logistics empire...',
+    'Build Your Logistics Empire',
     'UR Trade Network',
     'Created by UphyRaop',
     'data-progress-mode="indeterminate"',
@@ -278,6 +278,7 @@ required_loader_tokens = [
     "statusOverlay.dataset.progressMode = 'determinate'",
     "statusOverlay.dataset.progressMode = 'indeterminate'",
     'idm-loading-retry',
+    '© 2026 UR Trade Network. All rights reserved.',
     'prefers-reduced-motion: reduce',
     'Rotate your device to portrait',
     'screen.orientation',
@@ -287,6 +288,8 @@ required_loader_tokens = [
 for token in required_loader_tokens:
     if token not in html:
         raise SystemExit(f'Missing required branded loading behavior: {token}')
+if 'idm-loader-company' in html:
+    raise SystemExit('The loading footer must not add a publisher line above the creator credit.')
 html_path.write_text(html)
 PY
 grep -q 'viewport-fit=cover' "$staging/index.html"

@@ -56,6 +56,9 @@ jobs:
       - name: Export and verify the Web game
         run: ./scripts/export-web.sh
 
+      - name: Verify branded loading shell
+        run: python3 tests/loading_shell_test.py build/web/index.html
+
       - name: Upload exported game
         uses: actions/upload-pages-artifact@v4
         with:
