@@ -43,6 +43,8 @@
   const blockedPointers = new Set();
   const activePointers = new Map();
   const activeTouches = new Map();
+  let lastTouchTap = null;
+  let touchDoubleTapPending = false;
   let canvasEventsBound = false;
 
   function ensureRoot() {
@@ -105,7 +107,10 @@
         dragRotate: false,
         touchPitch: false,
         touchZoomRotate: true,
-        doubleClickZoom: true,
+        // Touch double-taps are handled explicitly below. This avoids relying
+        // on browser-generated dblclick events, which mobile Safari does not
+        // consistently emit for a canvas.
+        doubleClickZoom: false,
         scrollZoom: true,
         boxZoom: false,
         keyboard: false,
@@ -438,13 +443,18 @@
     const beginning = type === "pointerdown" || type === "touchstart" || type === "mousedown";
     const moving = type === "pointermove" || type === "touchmove" || type === "mousemove";
 
+    // Godot also forwards the same browser touch stream from its input callback.
+    // The captured native PointerEvents are authoritative; do not replay their
+    // compatibility copy into MapLibre or overwrite the tap recognizer state.
+    if (!event.isTrusted && activePointers.has(id) && activePointers.get(id).native && (kind === "touch" || type.indexOf("touch") === 0 || type === "pointerup" || type === "pointermove")) return true;
+
     if (beginning) {
       if (pointIsBlocked(point.x, point.y)) {
         blockedPointers.add(id);
         return false;
       }
       blockedPointers.delete(id);
-      const record = { id: id, kind: kind, x: point.x, y: point.y, screenX: Number(event.screenX || point.x), screenY: Number(event.screenY || point.y) };
+      const record = { id: id, kind: kind, x: point.x, y: point.y, startX: point.x, startY: point.y, moved: false, startedAt: performance.now(), native: Boolean(event.isTrusted), screenX: Number(event.screenX || point.x), screenY: Number(event.screenY || point.y) };
       activePointers.set(id, record);
       if (kind === "touch" || type === "touchstart") {
         activePointers.get(id).kind = "touch";
@@ -459,6 +469,7 @@
     if (moving) {
       if (blockedPointers.has(id)) return false;
       const active = activePointers.get(id);
+      if (active && active.kind === "touch" && Math.hypot(point.x - active.startX, point.y - active.startY) > 12) active.moved = true;
       // A forwarded stream that enters an overlay is cancelled at the map and
       // remains blocked until its matching release, so it cannot drag behind UI.
       if (pointIsBlocked(point.x, point.y)) {
@@ -484,6 +495,17 @@
       }
       const active = activePointers.get(id);
       const record = active || { id: id, kind: kind, x: point.x, y: point.y, screenX: point.x, screenY: point.y };
+      if (active && active.kind === "touch" && active.native && active.moved !== true && type !== "pointercancel" && type !== "touchcancel") {
+        const now = performance.now();
+        const closeToPrevious = lastTouchTap && now - lastTouchTap.at <= 360 && Math.hypot(point.x - lastTouchTap.x, point.y - lastTouchTap.y) <= 40;
+        if (closeToPrevious) {
+          touchDoubleTapPending = true;
+          lastTouchTap = null;
+          zoomBy(1.5, [point.x, point.y], 200);
+        } else {
+          lastTouchTap = { at: now, x: point.x, y: point.y };
+        }
+      }
       if (record.kind === "touch" || type === "touchend" || type === "touchcancel") {
         activeTouches.delete(id);
         record.x = point.x; record.y = point.y;
@@ -502,8 +524,7 @@
     }
     if (type === "dblclick" || type === "doubleclick") {
       if (pointIsBlocked(point.x, point.y)) return false;
-      dispatchMouse("dblclick", event, point, id);
-      return true;
+      return zoomBy(1.5, [point.x, point.y], 200);
     }
     return false;
   }
@@ -593,6 +614,7 @@
     setBlockRects: setBlockRects,
     fitRoute: fitRoute,
     forwardPointerEvent: forwardPointerEvent,
+    consumeTouchDoubleTap: function () { const pending = touchDoubleTapPending; touchDoubleTapPending = false; return pending; },
     setFollowTarget: setFollowTarget,
     isFollowing: function () { return Boolean(followTarget); },
     stopFollow: stopFollow,

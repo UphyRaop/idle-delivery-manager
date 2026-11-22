@@ -941,6 +941,15 @@ func _on_map_input(event: InputEvent) -> void:
 			map_view.queue_redraw()
 
 func _queue_map_tap(point: Vector2) -> void:
+	# Mobile Safari does not reliably synthesize dblclick for canvas touches.
+	# The MapLibre bridge recognizes two stationary native touch taps and zooms
+	# at their anchor; consume that result here to avoid selecting an order or
+	# applying a second zoom on the second tap.
+	if _javascript_truth(_maplibre_call("Boolean(window.IDMMap && window.IDMMap.consumeTouchDoubleTap())")):
+		pending_tap = false
+		pending_tap_generation += 1
+		last_tap_msec = 0
+		return
 	var now := Time.get_ticks_msec()
 	if now - last_tap_msec < 320:
 		pending_tap = false
