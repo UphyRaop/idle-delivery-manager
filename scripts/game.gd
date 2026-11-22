@@ -4,9 +4,15 @@ const LEGACY_SAVE_PATH := "user://delivery_ops_save.json"
 const ACTIVE_SAVE_MARKER := "user://idm_active_save.json"
 const WEB_SAVE_MIRROR_KEY := "idm_active_save_v1"
 const WEB_SAVE_PATH_KEY := "idm_active_save_path"
+const WEB_SAVE_CATALOG_KEY := "idm_save_catalog_v1"
+const SAVE_CATALOG_PATH := "user://idm_save_catalog.json"
+const SAVE_SESSION_PREFIX := "user://delivery_ops_session_"
 var save_path := LEGACY_SAVE_PATH
+var save_profiles: Array[Dictionary] = []
 var save_recovery_required := false
 var recovery_overlay: ColorRect
+var save_overlay: ColorRect
+var new_game_confirmation: ColorRect
 const STARTING_CASH := 500.0
 const STARTING_RIDERS := 3
 const ORDER_INTERVAL := 8.0
@@ -74,8 +80,11 @@ func _ready() -> void:
 	geographic_map_available = geographic_service.load_data()
 	road_network_available = road_router.load_network()
 	_load_map_texture()
+	_load_save_catalog()
 	_load_active_save_path()
 	_load_game()
+	if not save_recovery_required:
+		_register_current_save_profile()
 	_build_ui()
 	ThemeService.theme_changed.connect(_on_theme_changed)
 	get_viewport().size_changed.connect(_layout_ui)
@@ -89,15 +98,79 @@ func _ready() -> void:
 		_save_game()
 
 func _load_active_save_path() -> void:
-	var candidate := str(_web_storage_get(WEB_SAVE_PATH_KEY))
+	var stored_path: Variant = _web_storage_get(WEB_SAVE_PATH_KEY)
+	var candidate := ""
+	if stored_path != null:
+		candidate = str(stored_path)
+		if candidate in ["", "Null", "<null>"]:
+			candidate = ""
 	if candidate == "" and FileAccess.file_exists(ACTIVE_SAVE_MARKER):
 		var marker := FileAccess.open(ACTIVE_SAVE_MARKER, FileAccess.READ)
 		if marker != null:
 			var parsed := JSON.new()
 			if parsed.parse(marker.get_as_text()) == OK and typeof(parsed.data) == TYPE_DICTIONARY:
 				candidate = str(parsed.data.get("path", ""))
-	if candidate == LEGACY_SAVE_PATH or (candidate.begins_with("user://delivery_ops_session_") and candidate.ends_with(".json")):
+	if _is_valid_save_path(candidate):
 		save_path = candidate
+
+func _is_valid_save_path(path: String) -> bool:
+	return path == LEGACY_SAVE_PATH or (path.begins_with(SAVE_SESSION_PREFIX) and path.ends_with(".json"))
+
+func _save_mirror_key(path: String) -> String:
+	return "idm_save_" + path.sha256_text()
+
+func _load_save_catalog() -> void:
+	var catalog_text: Variant = _web_storage_get(WEB_SAVE_CATALOG_KEY)
+	if not catalog_text is String or catalog_text.is_empty():
+		if FileAccess.file_exists(SAVE_CATALOG_PATH):
+			var catalog_file := FileAccess.open(SAVE_CATALOG_PATH, FileAccess.READ)
+			if catalog_file != null:
+				catalog_text = catalog_file.get_as_text()
+	if not catalog_text is String or catalog_text.is_empty():
+		return
+	var parsed := JSON.new()
+	if parsed.parse(catalog_text) != OK or typeof(parsed.data) != TYPE_ARRAY:
+		return
+	for item in parsed.data:
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		var profile: Dictionary = item
+		var path := str(profile.get("path", ""))
+		if not _is_valid_save_path(path):
+			continue
+		if save_profiles.any(func(existing: Dictionary) -> bool: return str(existing.get("path", "")) == path):
+			continue
+		profile["path"] = path
+		save_profiles.append(profile)
+
+func _persist_save_catalog() -> void:
+	var serialized := JSON.stringify(save_profiles)
+	var catalog_file := FileAccess.open(SAVE_CATALOG_PATH, FileAccess.WRITE)
+	if catalog_file != null:
+		catalog_file.store_string(serialized)
+		catalog_file.flush()
+		catalog_file.close()
+	_web_storage_set(WEB_SAVE_CATALOG_KEY, serialized)
+
+func _register_current_save_profile() -> void:
+	if not _is_valid_save_path(save_path):
+		return
+	var display_name := "Legacy save · fictional map" if legacy_map_mode else "Geographic game · KL / Selangor"
+	var found := false
+	for index in save_profiles.size():
+		if str(save_profiles[index].get("path", "")) == save_path:
+			save_profiles[index]["title"] = display_name
+			save_profiles[index]["map_space"] = "legacy_normalized" if legacy_map_mode else "kl_selangor_web_mercator_uv"
+			found = true
+			break
+	if not found:
+		save_profiles.append({
+			"path": save_path,
+			"title": display_name,
+			"map_space": "legacy_normalized" if legacy_map_mode else "kl_selangor_web_mercator_uv",
+			"created_at": int(Time.get_unix_time_from_system()),
+		})
+	_persist_save_catalog()
 
 func _load_map_texture() -> void:
 	if not geographic_map_available:
@@ -1038,9 +1111,21 @@ func _refresh() -> void:
 				theme_button.custom_minimum_size.y = 50
 				order_list.add_child(theme_button)
 			else:
-				order_list.add_child(_label("Game controls", 16, "#f1f6fa"))
-				order_list.add_child(_label("Pause and simulation speed are available on the map.", 13, "#a8bac8"))
-				order_list.add_child(_label("The current prototype keeps its existing save format.", 12, "#91a8ba"))
+				order_list.add_child(_label("LEGACY · FICTIONAL MAP · PRESERVED" if legacy_map_mode else "GEOGRAPHIC · KL / SELANGOR", 12, "#f1f6fa"))
+				var continue_button := _button("Continue Game", _continue_game)
+				continue_button.custom_minimum_size.y = 46
+				order_list.add_child(continue_button)
+				var save_actions := HBoxContainer.new()
+				save_actions.add_theme_constant_override("separation", 6)
+				order_list.add_child(save_actions)
+				var load_button := _button("Load Game", _show_load_game)
+				load_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				load_button.custom_minimum_size.y = 46
+				save_actions.add_child(load_button)
+				var new_game_button := _button("New Game", _confirm_new_game)
+				new_game_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				new_game_button.custom_minimum_size.y = 46
+				save_actions.add_child(new_game_button)
 	rider_summary = null
 	finance_summary = null
 	if is_instance_valid(sheet_header_label):
@@ -1071,6 +1156,183 @@ func _metric_card(title: String, value: String) -> Control:
 func _toggle_theme() -> void:
 	ThemeService.toggle()
 	_refresh()
+
+func _continue_game() -> void:
+	_close_save_overlay()
+	selected_tab = "Map"
+	selected_subtab = "City" if not world_map else "World"
+	sheet_expanded = false
+	status_label.text = "Continuing legacy fictional-map save" if legacy_map_mode else "Continuing KL / Selangor geographic game"
+	_refresh()
+
+func _confirm_new_game() -> void:
+	if not geographic_map_available or not road_network_available:
+		status_label.text = "New geographic games are unavailable because KL road data did not load. Your save is unchanged."
+		return
+	_close_new_game_confirmation()
+	new_game_confirmation = ColorRect.new()
+	new_game_confirmation.color = Color(0.008, 0.025, 0.04, 0.84)
+	new_game_confirmation.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	new_game_confirmation.mouse_filter = Control.MOUSE_FILTER_STOP
+	new_game_confirmation.name = "NewGameConfirmation"
+	add_child(new_game_confirmation)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	new_game_confirmation.add_child(center)
+	var card := PanelContainer.new()
+	card.custom_minimum_size = Vector2(minf(350.0, viewport_size.x - 24.0), 0)
+	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
+	center.add_child(card)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 12)
+	card.add_child(column)
+	column.add_child(_label("START A NEW GAME?", 18, "#f1f6fa"))
+	var message := _label("A separate real KL / Selangor game will be created. Your current progress, including the legacy fictional-map save, will remain saved and available under Load Game.", 14, "#a8bac8")
+	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	message.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.add_child(message)
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 8)
+	column.add_child(actions)
+	var cancel_button := _button("Cancel", _close_new_game_confirmation)
+	cancel_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel_button.custom_minimum_size.y = 50
+	actions.add_child(cancel_button)
+	var start_button := _button("Start New Game", _start_new_geographic_game)
+	start_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	start_button.custom_minimum_size.y = 50
+	start_button.add_theme_color_override("font_color", Color("#04252d"))
+	var start_style := StyleBoxFlat.new()
+	start_style.bg_color = Color("#48d9e9")
+	start_style.set_corner_radius_all(14)
+	start_button.add_theme_stylebox_override("normal", start_style)
+	actions.add_child(start_button)
+
+func _close_new_game_confirmation() -> void:
+	if is_instance_valid(new_game_confirmation):
+		new_game_confirmation.queue_free()
+	new_game_confirmation = null
+
+func _start_new_geographic_game() -> void:
+	if not geographic_map_available or not road_network_available:
+		return
+	_save_game()
+	_register_current_save_profile()
+	var session_path := "%s%d_%06d.json" % [SAVE_SESSION_PREFIX, int(Time.get_unix_time_from_system()), randi_range(0, 999999)]
+	while FileAccess.file_exists(session_path) or _web_save_mirror_exists(session_path):
+		session_path = "%s%d_%06d.json" % [SAVE_SESSION_PREFIX, int(Time.get_unix_time_from_system()), randi_range(0, 999999)]
+	save_path = session_path
+	_set_active_save_path(save_path)
+	selected_tab = "Map"
+	selected_subtab = "City"
+	sheet_expanded = false
+	world_map = false
+	_new_game()
+	for _index in 2:
+		_spawn_order()
+	_register_current_save_profile()
+	_close_save_overlay()
+	_close_new_game_confirmation()
+	status_label.text = "New geographic game · real KL / Selangor roads"
+	_refresh()
+
+func _show_load_game() -> void:
+	_save_game()
+	_register_current_save_profile()
+	_close_save_overlay()
+	save_overlay = ColorRect.new()
+	save_overlay.color = Color(0.008, 0.025, 0.04, 0.84)
+	save_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	save_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	save_overlay.name = "SaveProfilesOverlay"
+	add_child(save_overlay)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	save_overlay.add_child(center)
+	var card := PanelContainer.new()
+	card.custom_minimum_size = Vector2(minf(340.0, viewport_size.x - 32.0), minf(520.0, viewport_size.y - 32.0))
+	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
+	center.add_child(card)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 8)
+	card.add_child(column)
+	column.add_child(_label("LOAD GAME", 19, "#f1f6fa"))
+	var description := _label("Each game is saved separately. Legacy map coordinates stay fictional.", 12, "#a8bac8")
+	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(description)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.custom_minimum_size.y = minf(390.0, viewport_size.y - 180.0)
+	column.add_child(scroll)
+	var profile_list := VBoxContainer.new()
+	profile_list.add_theme_constant_override("separation", 6)
+	scroll.add_child(profile_list)
+	var ordered_profiles := save_profiles.duplicate()
+	ordered_profiles.reverse()
+	var visible_count := 0
+	for profile in ordered_profiles:
+		var path := str(profile.get("path", ""))
+		if not _is_valid_save_path(path):
+			continue
+		visible_count += 1
+		var is_legacy := str(profile.get("map_space", "legacy_normalized")) != "kl_selangor_web_mercator_uv"
+		var label := ("Legacy save · fictional map\n%s" % ("Current game · preserved" if path == save_path else "Preserved · tap to load")) if is_legacy else ("KL / Selangor · geographic game\n%s" % ("Current game" if path == save_path else "Tap to load"))
+		var target_path := path
+		var load_button := _button(label, func(): _load_save_profile(target_path))
+		load_button.custom_minimum_size.y = 58
+		load_button.disabled = path == save_path
+		profile_list.add_child(load_button)
+	if visible_count == 0:
+		profile_list.add_child(_label("No saved games are available yet.", 13, "#a8bac8"))
+	var close_button := _button("Return to Game", _close_save_overlay)
+	close_button.custom_minimum_size.y = 46
+	column.add_child(close_button)
+
+func _web_save_mirror_exists(path: String) -> bool:
+	var value: Variant = _web_storage_get(_save_mirror_key(path))
+	if value is String and not value.is_empty():
+		var parsed := JSON.new()
+		if parsed.parse(value) == OK and typeof(parsed.data) == TYPE_DICTIONARY and str(parsed.data.get("path", "")) == path and parsed.data.get("data", {}) is Dictionary:
+			return true
+	if path == LEGACY_SAVE_PATH:
+		value = _web_storage_get(WEB_SAVE_MIRROR_KEY)
+		if value is String and not value.is_empty():
+			var parsed := JSON.new()
+			return parsed.parse(value) == OK and typeof(parsed.data) == TYPE_DICTIONARY and str(parsed.data.get("path", "")) == path
+	return FileAccess.file_exists(path)
+
+func _load_save_profile(path: String) -> void:
+	if not _is_valid_save_path(path):
+		status_label.text = "That saved game could not be found. Your current game remains active."
+		return
+	var previous_path := save_path
+	_save_game()
+	_register_current_save_profile()
+	save_path = path
+	_set_active_save_path(path)
+	save_recovery_required = false
+	world_map = false
+	_load_game()
+	if save_recovery_required:
+		save_path = previous_path
+		_set_active_save_path(previous_path)
+		save_recovery_required = false
+		_load_game()
+		_close_save_overlay()
+		status_label.text = "That save could not be loaded. Your previous game was restored and kept unchanged."
+		_refresh()
+		return
+	_register_current_save_profile()
+	selected_tab = "Map"
+	selected_subtab = "City" if not world_map else "World"
+	_close_save_overlay()
+	status_label.text = "Loaded %s" % ("legacy fictional-map save" if legacy_map_mode else "KL / Selangor geographic game")
+	_refresh()
+
+func _close_save_overlay() -> void:
+	if is_instance_valid(save_overlay):
+		save_overlay.queue_free()
+	save_overlay = null
 
 func _ready_count() -> int:
 	var count := 0
@@ -1231,7 +1493,11 @@ func _save_game() -> void:
 	# keeps the latest autosave available if Safari/Chrome reloads before its
 	# IndexedDB transaction finishes; the versioned user:// file remains primary
 	# on native builds and a fallback on Web.
-	_web_storage_set(WEB_SAVE_MIRROR_KEY, JSON.stringify({"path": save_path, "data": data}))
+	var envelope := JSON.stringify({"path": save_path, "data": data})
+	_web_storage_set(_save_mirror_key(save_path), envelope)
+	# Keep the pre-profile mirror key writable for older IDM builds. Per-path
+	# mirrors remain intact when the active profile changes.
+	_web_storage_set(WEB_SAVE_MIRROR_KEY, envelope)
 
 func _web_storage_get(key: String) -> Variant:
 	if not Engine.has_singleton("JavaScriptBridge"):
@@ -1251,7 +1517,9 @@ func _web_storage_set(key: String, value: String) -> void:
 	bridge.call("eval", code, true)
 
 func _web_save_mirror() -> Dictionary:
-	var mirrored: Variant = _web_storage_get(WEB_SAVE_MIRROR_KEY)
+	var mirrored: Variant = _web_storage_get(_save_mirror_key(save_path))
+	if not mirrored is String or mirrored.is_empty():
+		mirrored = _web_storage_get(WEB_SAVE_MIRROR_KEY)
 	if not mirrored is String or mirrored.is_empty():
 		return {}
 	var parsed := JSON.new()
@@ -1266,6 +1534,8 @@ func _web_save_mirror() -> Dictionary:
 	return data
 
 func _load_game() -> void:
+	selected_order = -1
+	sheet_expanded = false
 	var data := _web_save_mirror()
 	if data.is_empty():
 		if not FileAccess.file_exists(save_path):
@@ -1361,6 +1631,17 @@ func _new_game() -> void:
 	revenue_total = 0.0
 	cost_total = 0.0
 	delivered = 0
+	elapsed = 0.0
+	autosave_elapsed = 0.0
+	next_order_id = 1
+	next_rider_id = 1
+	speed = 1
+	paused = false
+	selected_order = -1
+	sheet_expanded = false
+	selected_tab = "Map"
+	selected_subtab = "City"
+	world_map = false
 	orders.clear()
 	riders.clear()
 	route_simulations.clear()
@@ -1411,10 +1692,13 @@ func _retry_load() -> void:
 		status_label.text = "Save could not be loaded. The original remains untouched."
 
 func _start_recovery_game() -> void:
-	var session_path := "user://delivery_ops_session_%d.json" % Time.get_unix_time_from_system()
+	var session_path := "%s%d_%06d.json" % [SAVE_SESSION_PREFIX, int(Time.get_unix_time_from_system()), randi_range(0, 999999)]
 	save_path = session_path
 	_set_active_save_path(save_path)
 	_new_game()
+	for _index in 2:
+		_spawn_order()
+	_register_current_save_profile()
 	if is_instance_valid(recovery_overlay):
 		recovery_overlay.queue_free()
 	_refresh()
