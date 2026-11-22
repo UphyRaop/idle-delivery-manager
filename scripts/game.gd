@@ -13,6 +13,13 @@ var save_recovery_required := false
 var recovery_overlay: ColorRect
 var save_overlay: ColorRect
 var new_game_confirmation: ColorRect
+var company_name_input: LineEdit
+var company_service_option: OptionButton
+var company_difficulty_option: OptionButton
+var company_location_option: OptionButton
+var company_setup_error: Label
+var company_setup_center: CenterContainer
+var company_setup_card: PanelContainer
 var menu_overlay: ColorRect
 var return_menu_confirmation: ColorRect
 var menu_settings_open := false
@@ -20,6 +27,9 @@ var main_menu_active := true
 var game_session_started := false
 const STARTING_CASH := 500.0
 const STARTING_RIDERS := 3
+const DEFAULT_COMPANY_NAME := "My Logistics Sdn. Bhd."
+const LEGACY_COMPANY_NAME := "Legacy Delivery Company"
+const STARTING_LOCATION_NAMES := ["Kuala Lumpur", "Petaling Jaya", "Subang Jaya", "Kajang", "Ampang Jaya", "Selayang", "Puchong", "Kampung Pandan"]
 const ORDER_INTERVAL := 8.0
 const TRAVEL_SECONDS := 12.0
 
@@ -31,6 +41,10 @@ var riders: Array[Dictionary] = []
 var orders: Array[Dictionary] = []
 var paused := false
 var speed := 1
+var player_company_name := DEFAULT_COMPANY_NAME
+var player_company_service := ""
+var player_difficulty := "standard"
+var player_starting_location := "Kuala Lumpur"
 var elapsed := 0.0
 var autosave_elapsed := 0.0
 var next_order_id := 1
@@ -184,7 +198,7 @@ func _persist_save_catalog() -> void:
 func _register_current_save_profile() -> void:
 	if not _is_valid_save_path(save_path):
 		return
-	var display_name := "Legacy save · fictional map" if legacy_map_mode else "Geographic game · KL / Selangor"
+	var display_name := "Legacy save · fictional map" if legacy_map_mode else "%s · %s" % [player_company_name, player_starting_location]
 	var found := false
 	for index in save_profiles.size():
 		if str(save_profiles[index].get("path", "")) == save_path:
@@ -547,7 +561,7 @@ func _build_ui() -> void:
 	top_row.add_theme_constant_override("separation", ThemeService.space("xs"))
 	hud.add_child(top_row)
 	brand_label = Label.new()
-	brand_label.text = "UR Trade Network"
+	brand_label.text = player_company_name
 	brand_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	brand_label.add_theme_color_override("font_color", Color("#45d9ec"))
 	brand_label.add_theme_font_size_override("font_size", ThemeService.font_size("section"))
@@ -892,6 +906,12 @@ func _layout_ui() -> void:
 	if is_instance_valid(status_label):
 		var active_map_order: bool = selected_tab == "Map" and not selected.is_empty() and (selected["status"] == "Waiting" or str(selected["status"]).begins_with("On route"))
 		status_label.visible = status_label.text != "" and (sheet_expanded or selected_tab == "Map") and not active_map_order
+	if is_instance_valid(company_setup_center) and is_instance_valid(company_setup_card):
+		company_setup_center.offset_left = (safe_left + 12.0) * ui_layout_scale
+		company_setup_center.offset_right = -(safe_right + 12.0) * ui_layout_scale
+		company_setup_center.offset_top = (safe_top + 12.0) * ui_layout_scale
+		company_setup_center.offset_bottom = -(safe_bottom + 12.0) * ui_layout_scale
+		company_setup_card.custom_minimum_size.x = maxf(0.0, minf(366.0, viewport_size.x - safe_left - safe_right - 24.0 * ui_layout_scale))
 	for tab in nav_buttons:
 		var nav_button: Button = nav_buttons[tab]
 		var selected_button: bool = tab == selected_tab
@@ -905,7 +925,7 @@ func _layout_ui() -> void:
 		bottom_nav.move_to_front()
 	if viewport_changed:
 		call_deferred("_refresh")
-		if main_menu_active:
+		if main_menu_active and not is_instance_valid(new_game_confirmation) and not is_instance_valid(save_overlay):
 			call_deferred("_render_main_menu")
 
 func _ui_size(value: float) -> float:
@@ -974,7 +994,7 @@ func _update_browser_map(delta: float) -> void:
 	if not maplibre_initialized:
 		_maplibre_call("window.IDMMap.setTheme(%s)" % JSON.stringify(ThemeService.mode))
 		if geographic_map_available and not legacy_map_mode:
-			var center := [DEFAULT_CITY_CENTER.x, DEFAULT_CITY_CENTER.y]
+			var center := _starting_location_center()
 			var target_zoom := DEFAULT_CITY_ZOOM
 			if pending_map_camera.has("center") and pending_map_camera["center"] is Array and pending_map_camera["center"].size() >= 2:
 				center = pending_map_camera["center"]
@@ -1626,7 +1646,7 @@ func _spawn_order() -> void:
 						break
 	if duplicate_point:
 		return
-	var service_id: String = IDMServicePricing.service_ids().pick_random()
+	var service_id: String = player_company_service if player_company_service in IDMServicePricing.service_ids() else IDMServicePricing.service_ids().pick_random()
 	var route_distance_km := float(dropoff_route.get("distance_km", 0.0))
 	var route_eta_seconds := float(dropoff_route.get("estimated_time_seconds", 0.0))
 	var price_quote := IDMServicePricing.quote(service_id, route_distance_km, route_eta_seconds)
@@ -1874,6 +1894,10 @@ func _follow_selected_rider() -> void:
 func _refresh() -> void:
 	if not is_instance_valid(order_list):
 		return
+	if is_instance_valid(brand_label):
+		brand_label.text = player_company_name
+		brand_label.tooltip_text = player_company_name
+		brand_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	cash_label.text = _format_rm(cash)
 	active_jobs_label.text = "ACTIVE  %d" % _busy_count()
 	pending_jobs_label.text = "ORDERS  %d" % _waiting_count()
@@ -1962,14 +1986,18 @@ func _refresh() -> void:
 				_set_button_variant(hire, "action")
 				order_list.add_child(hire)
 			else:
-				order_list.add_child(_label("COMPANY SNAPSHOT", 11, "#91a8ba"))
+				order_list.add_child(_label("COMPANY · %s" % player_company_name, 12, "#f1f6fa"))
 				var company_row := HBoxContainer.new()
 				company_row.add_theme_constant_override("separation", 6)
 				order_list.add_child(company_row)
 				company_row.add_child(_metric_card("PARTNERS", str(riders.size())))
 				company_row.add_child(_metric_card("DELIVERIES", str(delivered)))
-				order_list.add_child(_label("Service network  ·  Malaysia", 12, "#a8bac8"))
+				var service_name := IDMServicePricing.label(player_company_service) if player_company_service in IDMServicePricing.service_ids() else "Existing service network"
+				order_list.add_child(_label("%s  ·  %s  ·  %s" % [service_name, player_starting_location, player_difficulty.capitalize()], 12, "#a8bac8"))
 		"Finance":
+			var company_finance_label := _label("%s  ·  %s" % [player_company_name, player_starting_location], 11, "#91a8ba")
+			company_finance_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			order_list.add_child(company_finance_label)
 			if selected_subtab == "Statements":
 				order_list.add_child(_label("FINANCIAL SUMMARY  ·  ALL AMOUNTS IN RM", 11, "#91a8ba"))
 			var metrics_row := HBoxContainer.new()
@@ -2092,27 +2120,78 @@ func _confirm_new_game() -> void:
 		status_label.text = "New geographic games are unavailable because KL road data did not load. Your save is unchanged."
 		return
 	_close_new_game_confirmation()
+	company_name_input = null
+	company_service_option = null
+	company_difficulty_option = null
+	company_location_option = null
+	company_setup_error = null
+	company_setup_center = null
+	company_setup_card = null
 	new_game_confirmation = ColorRect.new()
 	new_game_confirmation.color = Color(0.008, 0.025, 0.04, 0.84)
 	new_game_confirmation.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	new_game_confirmation.mouse_filter = Control.MOUSE_FILTER_STOP
 	new_game_confirmation.name = "NewGameConfirmation"
 	add_child(new_game_confirmation)
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	new_game_confirmation.add_child(center)
-	var card := PanelContainer.new()
-	card.custom_minimum_size = Vector2(minf(350.0, viewport_size.x - 24.0), 0)
-	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
-	center.add_child(card)
+	company_setup_center = CenterContainer.new()
+	company_setup_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	new_game_confirmation.add_child(company_setup_center)
+	company_setup_card = PanelContainer.new()
+	company_setup_card.custom_minimum_size = Vector2(minf(366.0, viewport_size.x - 24.0), 0)
+	company_setup_card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
+	company_setup_center.add_child(company_setup_card)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 12)
-	card.add_child(column)
-	column.add_child(_label("START A NEW GAME?", 18, "#f1f6fa"))
-	var message := _label("A separate real KL / Selangor game will be created. Your current progress, including the legacy fictional-map save, will remain saved and available under Load Game.", 14, "#a8bac8")
+	column.add_theme_constant_override("separation", 7)
+	company_setup_card.add_child(column)
+	column.add_child(_label("CREATE YOUR COMPANY", 18, "#f1f6fa"))
+	var message := _label("Choose your first service and a supported real KL / Selangor location. Existing saves stay untouched.", 12, "#a8bac8")
 	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	message.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	column.add_child(message)
+	column.add_child(_label("COMPANY NAME", 11, "#91a8ba"))
+	company_name_input = LineEdit.new()
+	company_name_input.text = DEFAULT_COMPANY_NAME
+	company_name_input.placeholder_text = DEFAULT_COMPANY_NAME
+	company_name_input.max_length = 40
+	company_name_input.custom_minimum_size.y = 46
+	company_name_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	company_name_input.add_theme_font_size_override("font_size", 14)
+	company_name_input.add_theme_color_override("font_color", Color("#f1f6fa"))
+	company_name_input.add_theme_color_override("font_placeholder_color", Color("#91a8ba"))
+	var input_style := StyleBoxFlat.new()
+	input_style.bg_color = Color("#152f40")
+	input_style.border_color = Color("#315263")
+	input_style.set_border_width_all(1)
+	input_style.set_corner_radius_all(12)
+	input_style.content_margin_left = 12
+	input_style.content_margin_right = 12
+	company_name_input.add_theme_stylebox_override("normal", input_style)
+	company_name_input.add_theme_stylebox_override("focus", input_style.duplicate())
+	column.add_child(company_name_input)
+	column.add_child(_label("STARTING SERVICE", 11, "#91a8ba"))
+	company_service_option = _company_setup_option([
+		["Food Delivery", "food_delivery"],
+		["Parcel Logistics", "parcel_logistics"],
+		["E-Hailing", "e_hailing"],
+		["Same-Day / Express", "express_logistics"],
+	], "food_delivery")
+	column.add_child(company_service_option)
+	column.add_child(_label("DIFFICULTY", 11, "#91a8ba"))
+	company_difficulty_option = _company_setup_option([
+		["Casual", "casual"], ["Standard", "standard"], ["Realistic", "realistic"],
+	], "standard")
+	column.add_child(company_difficulty_option)
+	column.add_child(_label("STARTING LOCATION · REAL MAP DATA", 11, "#91a8ba"))
+	var locations: Array = []
+	for name in STARTING_LOCATION_NAMES:
+		if _find_geographic_place(str(name)).size() > 0:
+			locations.append([str(name), str(name)])
+	company_location_option = _company_setup_option(locations, "Kuala Lumpur")
+	company_location_option.name = "StartingLocationOption"
+	column.add_child(company_location_option)
+	company_setup_error = _label("", 11, "#ff9ba4")
+	company_setup_error.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(company_setup_error)
 	var actions := HBoxContainer.new()
 	actions.add_theme_constant_override("separation", 8)
 	column.add_child(actions)
@@ -2120,7 +2199,7 @@ func _confirm_new_game() -> void:
 	cancel_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cancel_button.custom_minimum_size.y = 50
 	actions.add_child(cancel_button)
-	var start_button := _button("Start New Game", _start_new_geographic_game)
+	var start_button := _button("Create Company", _start_new_geographic_game)
 	start_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	start_button.custom_minimum_size.y = 50
 	start_button.add_theme_color_override("font_color", Color("#04252d"))
@@ -2129,18 +2208,90 @@ func _confirm_new_game() -> void:
 	start_style.set_corner_radius_all(14)
 	start_button.add_theme_stylebox_override("normal", start_style)
 	actions.add_child(start_button)
+	_layout_ui()
+
+func _company_setup_option(items: Array, selected_id: String) -> OptionButton:
+	var option := OptionButton.new()
+	option.custom_minimum_size.y = 46
+	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	option.add_theme_font_size_override("font_size", 13)
+	option.add_theme_color_override("font_color", Color("#f1f6fa"))
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color("#152f40")
+	style.border_color = Color("#315263")
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(12)
+	style.content_margin_left = 10
+	style.content_margin_right = 10
+	option.add_theme_stylebox_override("normal", style)
+	option.add_theme_stylebox_override("hover", style.duplicate())
+	option.add_theme_stylebox_override("pressed", style.duplicate())
+	option.add_theme_stylebox_override("focus", style.duplicate())
+	for item in items:
+		var label := str(item[0])
+		var value := str(item[1])
+		option.add_item(label)
+		option.set_item_metadata(option.item_count - 1, value)
+		if value == selected_id:
+			option.select(option.item_count - 1)
+	return option
+
+func _find_geographic_place(place_name: String) -> Dictionary:
+	for place in geographic_service.places:
+		if str(place.get("name", "")) == place_name:
+			return place
+	return {}
+
+func _starting_location_center() -> Array:
+	var place := _find_geographic_place(player_starting_location)
+	if place.is_empty():
+		return [DEFAULT_CITY_CENTER.x, DEFAULT_CITY_CENTER.y]
+	return [float(place.get("lon_e6", DEFAULT_CITY_CENTER.x * 1000000.0)) / 1000000.0, float(place.get("lat_e6", DEFAULT_CITY_CENTER.y * 1000000.0)) / 1000000.0]
+
+func _difficulty_starting_cash(difficulty: String) -> float:
+	match difficulty:
+		"casual": return 750.0
+		"realistic": return 350.0
+		_: return STARTING_CASH
 
 func _close_new_game_confirmation() -> void:
 	if is_instance_valid(new_game_confirmation):
 		new_game_confirmation.queue_free()
 	new_game_confirmation = null
+	company_setup_center = null
+	company_setup_card = null
 
 func _start_new_geographic_game() -> void:
 	if not geographic_map_available or not road_network_available:
 		return
+	var new_company_name := DEFAULT_COMPANY_NAME
+	var new_service := "food_delivery"
+	var new_difficulty := "standard"
+	var new_location := "Kuala Lumpur"
+	if is_instance_valid(company_name_input):
+		new_company_name = company_name_input.text.strip_edges()
+		if new_company_name.is_empty():
+			company_setup_error.text = "Enter a company name to continue."
+			return
+		if new_company_name.length() > 40:
+			company_setup_error.text = "Company names can be up to 40 characters."
+			return
+		if not is_instance_valid(company_service_option) or not is_instance_valid(company_difficulty_option) or not is_instance_valid(company_location_option):
+			company_setup_error.text = "Choose a service, difficulty, and supported location."
+			return
+		new_service = str(company_service_option.get_item_metadata(company_service_option.selected))
+		new_difficulty = str(company_difficulty_option.get_item_metadata(company_difficulty_option.selected))
+		new_location = str(company_location_option.get_item_metadata(company_location_option.selected))
+		if new_service not in IDMServicePricing.service_ids() or new_difficulty not in ["casual", "standard", "realistic"] or _find_geographic_place(new_location).is_empty():
+			company_setup_error.text = "Choose a supported company setup before starting."
+			return
 	if game_session_started and _save_payload_for_path(save_path).size() > 0:
 		_save_game()
 		_register_current_save_profile()
+	player_company_name = new_company_name
+	player_company_service = new_service
+	player_difficulty = new_difficulty
+	player_starting_location = new_location
 	var session_path := "%s%d_%06d.json" % [SAVE_SESSION_PREFIX, int(Time.get_unix_time_from_system()), randi_range(0, 999999)]
 	while FileAccess.file_exists(session_path) or _web_save_mirror_exists(session_path):
 		session_path = "%s%d_%06d.json" % [SAVE_SESSION_PREFIX, int(Time.get_unix_time_from_system()), randi_range(0, 999999)]
@@ -2161,6 +2312,7 @@ func _start_new_geographic_game() -> void:
 	selected_subtab = "City"
 	sheet_expanded = false
 	world_map = false
+	last_city_camera.clear()
 	_new_game()
 	for _index in 2:
 		_spawn_order()
@@ -2457,6 +2609,13 @@ func _save_game() -> void:
 		"next_rider_id": next_rider_id,
 		"elapsed": elapsed,
 		"speed": speed,
+		"company": {
+			"id": "company_%s" % player_company_service if not player_company_service.is_empty() else "company_legacy",
+			"name": player_company_name,
+			"service_id": player_company_service,
+			"difficulty": player_difficulty,
+			"starting_location": player_starting_location,
+		},
 	}
 	if _maplibre_active():
 		var camera := _browser_camera_snapshot()
@@ -2537,6 +2696,25 @@ func _load_game() -> void:
 	# Existing normalized saves belong to the old fictional prototype map. Keep
 	# them in that coordinate space until a deliberate, visible migration exists.
 	legacy_map_mode = str(data.get("map_space", "legacy_normalized")) != "kl_selangor_web_mercator_uv"
+	var saved_company: Variant = data.get("company", {})
+	if saved_company is Dictionary and not saved_company.is_empty():
+		player_company_name = str(saved_company.get("name", LEGACY_COMPANY_NAME)).strip_edges()
+		player_company_service = str(saved_company.get("service_id", ""))
+		player_difficulty = str(saved_company.get("difficulty", "standard"))
+		player_starting_location = str(saved_company.get("starting_location", "Kuala Lumpur" if not legacy_map_mode else "Legacy location"))
+	else:
+		player_company_name = str(data.get("company_name", LEGACY_COMPANY_NAME)).strip_edges()
+		player_company_service = str(data.get("company_service", ""))
+		player_difficulty = str(data.get("difficulty", "standard"))
+		player_starting_location = str(data.get("starting_location", "Kuala Lumpur" if not legacy_map_mode else "Legacy location"))
+	if player_company_name.is_empty():
+		player_company_name = LEGACY_COMPANY_NAME
+	if player_company_service not in IDMServicePricing.service_ids():
+		player_company_service = ""
+	if player_difficulty not in ["casual", "standard", "realistic"]:
+		player_difficulty = "standard"
+	if not legacy_map_mode and _find_geographic_place(player_starting_location).is_empty():
+		player_starting_location = "Kuala Lumpur"
 	var saved_camera: Variant = data.get("map_camera", {})
 	if not legacy_map_mode and saved_camera is Dictionary and saved_camera.get("center", null) is Array:
 		pending_map_camera = saved_camera.duplicate(true)
@@ -2612,7 +2790,7 @@ func _as_vector2(value: Variant, fallback: Vector2) -> Vector2:
 func _new_game(persist: bool = true) -> void:
 	save_recovery_required = false
 	legacy_map_mode = false
-	cash = STARTING_CASH
+	cash = _difficulty_starting_cash(player_difficulty)
 	revenue_total = 0.0
 	cost_total = 0.0
 	delivered = 0
