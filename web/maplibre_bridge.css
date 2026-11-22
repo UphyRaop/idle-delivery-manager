@@ -30,13 +30,13 @@
   background: rgb(8 22 31 / 78%);
   border-radius: 5px 0 0 0;
   font: 10px/1.4 system-ui, sans-serif;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 /* Keep required attribution clear of the game HUD and map controls. */
 #idm-map-root .maplibregl-ctrl-top-left {
-  top: 150px;
-  left: 10px;
+  top: calc(146px + env(safe-area-inset-top, 0px));
+  left: calc(10px + env(safe-area-inset-left, 0px));
 }
 
 #idm-map-root .maplibregl-ctrl-top-left .maplibregl-ctrl-attrib {
@@ -63,8 +63,14 @@
   pointer-events: none;
 }
 
+#idm-map-root .maplibregl-ctrl-attrib,
+#idm-map-root .maplibregl-ctrl-attrib a {
+  pointer-events: auto;
+}
+
 @media (orientation: landscape) {
   #idm-map-root .maplibregl-ctrl-top-left {
-    left: 112px;
+    top: calc(142px + env(safe-area-inset-top, 0px));
+    left: calc(160px + env(safe-area-inset-left, 0px));
   }
 }

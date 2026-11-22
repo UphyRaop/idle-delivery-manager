@@ -55,6 +55,8 @@ var sheet_content: VBoxContainer
 var sheet_toggle_button: Button
 var sheet_header_label: Label
 var map_controls: GridContainer
+var fit_route_button: Button
+var follow_rider_button: Button
 var bottom_nav: PanelContainer
 var nav_buttons: Dictionary = {}
 var hud: PanelContainer
@@ -88,6 +90,7 @@ var map_camera_sync_elapsed := 0.0
 var safe_area_refresh_elapsed := 0.0
 var browser_block_rects_dirty := false
 var browser_block_rects: Array[Dictionary] = []
+var geographic_static_overlay_signature := ""
 var pending_tap := false
 var pending_tap_generation := 0
 var pending_tap_point := Vector2.ZERO
@@ -250,7 +253,7 @@ func _process(delta: float) -> void:
 			followed_rider_id = -1
 		elif _maplibre_active():
 			follow_update_elapsed += delta
-			if follow_update_elapsed >= 0.25:
+			if follow_update_elapsed >= 0.08:
 				follow_update_elapsed = 0.0
 				var geo := geographic_service.uv_to_geo(followed_rider["position"])
 				_maplibre_call("window.IDMMap.setFollowTarget(%s, %s)" % [JSON.stringify(geo.x), JSON.stringify(geo.y)])
@@ -261,6 +264,7 @@ func _process(delta: float) -> void:
 		if autosave_elapsed >= 1.0:
 			autosave_elapsed = 0.0
 			_save_game()
+	_sync_geographic_overlays()
 	_refresh_map()
 
 func _build_ui() -> void:
@@ -289,11 +293,11 @@ func _build_ui() -> void:
 	activity.custom_minimum_size.x = 70
 	top_row.add_child(activity)
 	active_jobs_label = Label.new()
-	active_jobs_label.add_theme_font_size_override("font_size", 12)
+	active_jobs_label.add_theme_font_size_override("font_size", 11)
 	active_jobs_label.add_theme_color_override("font_color", ThemeService.color("text"))
 	activity.add_child(active_jobs_label)
 	pending_jobs_label = Label.new()
-	pending_jobs_label.add_theme_font_size_override("font_size", 11)
+	pending_jobs_label.add_theme_font_size_override("font_size", 10)
 	pending_jobs_label.add_theme_color_override("font_color", ThemeService.color("muted"))
 	activity.add_child(pending_jobs_label)
 	var balance := VBoxContainer.new()
@@ -306,9 +310,9 @@ func _build_ui() -> void:
 	cash_label.add_theme_color_override("font_color", Color("#f3f7fb"))
 	balance.add_child(cash_label)
 	available_label = Label.new()
-	available_label.text = "AVAILABLE"
+	available_label.text = "1× · RUNNING"
 	available_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	available_label.add_theme_font_size_override("font_size", 10)
+	available_label.add_theme_font_size_override("font_size", 9)
 	available_label.add_theme_color_override("font_color", Color("#91a8ba"))
 	balance.add_child(available_label)
 
@@ -320,13 +324,15 @@ func _build_ui() -> void:
 	sim_row.add_theme_constant_override("separation", 4)
 	sim_controls.add_child(sim_row)
 	pause_button = _button("Pause", _toggle_pause)
-	pause_button.custom_minimum_size = Vector2(74, 52)
+	pause_button.custom_minimum_size = Vector2(60, 46)
+	pause_button.tooltip_text = "Pause or resume the simulation"
 	sim_row.add_child(pause_button)
 	for multiplier in [1, 2, 5, 10]:
 		var factor: int = multiplier
 		var speed_button := _button(str(factor) + "×", func(): _set_speed(factor))
-		speed_button.custom_minimum_size = Vector2(50, 52)
-		speed_button.add_theme_font_size_override("font_size", 14)
+		speed_button.custom_minimum_size = Vector2(42, 46)
+		speed_button.add_theme_font_size_override("font_size", 13)
+		speed_button.tooltip_text = "Set simulation speed to %d times" % factor
 		speed_buttons[factor] = speed_button
 		sim_row.add_child(speed_button)
 
@@ -335,16 +341,19 @@ func _build_ui() -> void:
 	map_controls.add_theme_constant_override("h_separation", 4)
 	map_controls.add_theme_constant_override("v_separation", 5)
 	add_child(map_controls)
-	var zoom_in := _button("Zoom +", func(): _zoom_map(1.25))
-	var zoom_out := _button("Zoom -", func(): _zoom_map(0.8))
+	var zoom_in := _button("+", func(): _zoom_map(1.25))
+	var zoom_out := _button("-", func(): _zoom_map(0.8))
 	var recenter := _button("Center", _recenter_map)
-	for control in [zoom_in, zoom_out]:
-		control.custom_minimum_size = Vector2(82, 58)
-		control.add_theme_font_size_override("font_size", 14)
-		map_controls.add_child(control)
-	recenter.custom_minimum_size = Vector2(72, 54)
-	for control in [recenter]:
-		control.add_theme_font_size_override("font_size", 14)
+	fit_route_button = _button("Fit", _fit_selected_booking)
+	follow_rider_button = _button("Follow", _follow_selected_rider)
+	zoom_in.tooltip_text = "Zoom in"
+	zoom_out.tooltip_text = "Zoom out"
+	recenter.tooltip_text = "Center map"
+	fit_route_button.tooltip_text = "Fit selected booking or active route"
+	follow_rider_button.tooltip_text = "Follow selected delivery partner"
+	for control in [zoom_in, zoom_out, recenter, fit_route_button, follow_rider_button]:
+		control.custom_minimum_size = Vector2(66, 48)
+		control.add_theme_font_size_override("font_size", 13)
 		map_controls.add_child(control)
 
 	sheet = PanelContainer.new()
@@ -380,7 +389,7 @@ func _build_ui() -> void:
 	order_list = VBoxContainer.new()
 	order_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	order_list.custom_minimum_size.y = 24
-	order_list.add_theme_constant_override("separation", 8)
+	order_list.add_theme_constant_override("separation", 3)
 	sheet_content.add_child(order_list)
 	status_label = Label.new()
 	status_label.add_theme_font_size_override("font_size", 13)
@@ -454,16 +463,20 @@ func _layout_ui() -> void:
 	for speed_button in speed_buttons.values():
 		speed_button.add_theme_font_size_override("font_size", int(round(14.0 * ui_scale)))
 	for map_control in map_controls.get_children():
-		map_control.add_theme_font_size_override("font_size", int(round((14.0 if map_control.text.begins_with("Zoom") or map_control.text == "Center" else 22.0) * ui_scale)))
+		map_control.add_theme_font_size_override("font_size", int(round((13.0 if map_control.text in ["Center", "Fit", "Follow"] else 20.0) * ui_scale)))
+	if is_instance_valid(follow_rider_button):
+		follow_rider_button.text = "Stop" if map_camera.follow_enabled else "Follow"
+		follow_rider_button.tooltip_text = "Exit rider follow mode" if map_camera.follow_enabled else "Follow selected delivery partner"
 	for nav_button in nav_buttons.values():
 		nav_button.add_theme_font_size_override("font_size", int(round(14.0 * ui_scale)))
 	brand_label.add_theme_font_size_override("font_size", int(round(19.0 * ui_scale)))
 	active_jobs_label.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
 	pending_jobs_label.add_theme_font_size_override("font_size", int(round(11.0 * ui_scale)))
 	cash_label.add_theme_font_size_override("font_size", int(round(16.0 * ui_scale)))
-	available_label.add_theme_font_size_override("font_size", int(round(10.0 * ui_scale)))
+	available_label.add_theme_font_size_override("font_size", int(round(9.0 * ui_scale)))
 	status_label.add_theme_font_size_override("font_size", int(round(13.0 * ui_scale)))
-	pause_button.add_theme_font_size_override("font_size", int(round(15.0 * ui_scale)))
+	pause_button.add_theme_font_size_override("font_size", int(round(13.0 * ui_scale)))
+	_update_sim_controls()
 	var sim_row := sim_controls.get_child(0) as HBoxContainer
 	if sim_row != null:
 		sim_row.add_theme_constant_override("separation", int(round(4.0 * ui_layout_scale)))
@@ -471,13 +484,13 @@ func _layout_ui() -> void:
 	if nav_row != null:
 		nav_row.add_theme_constant_override("separation", int(round(5.0 * ui_layout_scale)))
 	var selected := _find_order(selected_order)
-	var order_detail_open: bool = selected_tab == "Map" and not selected.is_empty() and selected["status"] == "Waiting"
+	var order_detail_open: bool = selected_tab == "Map" and not selected.is_empty() and (selected["status"] == "Waiting" or str(selected["status"]).begins_with("On route"))
 	var nav_height: int = 76 if not is_landscape else 64
-	var sheet_height: int = 258 if sheet_expanded else 148
+	var sheet_height: int = 268 if sheet_expanded else 124
 	if is_landscape:
-		sheet_height = 222 if sheet_expanded else 122
+		sheet_height = 218 if sheet_expanded else 116
 	if is_desktop:
-		sheet_height = 260 if sheet_expanded else 128
+		sheet_height = 268 if sheet_expanded else 124
 	var safe_left := safe_insets.x
 	var safe_top := safe_insets.y
 	var safe_right := safe_insets.z
@@ -493,22 +506,22 @@ func _layout_ui() -> void:
 	sim_controls.offset_top = safe_top + 72 * ui_layout_scale
 	sim_controls.offset_right = safe_left + 306 * ui_layout_scale
 	sim_controls.offset_bottom = safe_top + 134 * ui_layout_scale
-	pause_button.custom_minimum_size = Vector2(74, 52) * ui_layout_scale
+	pause_button.custom_minimum_size = Vector2(60, 46) * ui_layout_scale
 	for speed_button in speed_buttons.values():
-		speed_button.custom_minimum_size = Vector2(50, 52) * ui_layout_scale
+		speed_button.custom_minimum_size = Vector2(42, 46) * ui_layout_scale
 
 	# The compact landscape sheet sits over the right side of the map. Keep
 	# zoom/recenter controls on the left in both compact and expanded states.
 	var controls_on_left := is_landscape
-	map_controls.columns = 1
+	map_controls.columns = 2 if is_landscape else 1
 	map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT if controls_on_left else Control.PRESET_TOP_RIGHT)
-	map_controls.offset_left = safe_left + 12 * ui_layout_scale if controls_on_left else -safe_right - 102 * ui_layout_scale
-	map_controls.offset_right = safe_left + 102 * ui_layout_scale if controls_on_left else -safe_right - 12 * ui_layout_scale
-	map_controls.offset_top = safe_top + 148 * ui_layout_scale
-	map_controls.offset_bottom = safe_top + 300 * ui_layout_scale
+	map_controls.offset_left = safe_left + 12 * ui_layout_scale if controls_on_left else -safe_right - 78 * ui_layout_scale
+	map_controls.offset_right = safe_left + 150 * ui_layout_scale if controls_on_left else -safe_right - 12 * ui_layout_scale
+	map_controls.offset_top = safe_top + 142 * ui_layout_scale
+	map_controls.offset_bottom = safe_top + 302 * ui_layout_scale
 	for index in range(map_controls.get_child_count()):
 		var map_control: Button = map_controls.get_child(index)
-		map_control.custom_minimum_size = (Vector2(82, 58) if index < 2 else Vector2(72, 54)) * ui_layout_scale
+		map_control.custom_minimum_size = Vector2(66, 48) * ui_layout_scale
 
 	bottom_nav.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	if is_desktop:
@@ -547,6 +560,7 @@ func _layout_ui() -> void:
 	if is_instance_valid(sheet_toggle_button):
 		sheet_toggle_button.custom_minimum_size = Vector2(76, 40 if is_landscape and sheet_expanded else 44) * ui_layout_scale
 	if is_instance_valid(order_list):
+		order_list.add_theme_constant_override("separation", 3 if sheet_expanded else 0)
 		var subtabs: HBoxContainer = sheet_content.find_child("Subtabs", true, false)
 		if is_instance_valid(subtabs):
 			# Keep the dispatch action above the bottom navigation on short screens.
@@ -667,6 +681,7 @@ func _update_browser_map(delta: float) -> void:
 			map_camera.follow_enabled = _javascript_truth(_maplibre_call("Boolean(window.IDMMap.isFollowing())"))
 			if not map_camera.follow_enabled:
 				followed_rider_id = -1
+				_update_follow_button()
 	else:
 		browser_map_state = _browser_camera_snapshot()
 		if not browser_map_state.is_empty():
@@ -674,35 +689,107 @@ func _update_browser_map(delta: float) -> void:
 	map_view.queue_redraw()
 
 func _screen_for_uv(uv: Vector2) -> Vector2:
-	if not _maplibre_active() or browser_map_state.is_empty():
-		return map_camera.world_to_screen(uv, _map_content_rect(map_view.size))
-	var geo := geographic_service.uv_to_geo(uv)
-	return _screen_for_geo(geo)
+	return map_camera.world_to_screen(uv, _map_content_rect(map_view.size))
 
-func _screen_for_geo(lon_lat: Vector2) -> Vector2:
-	if browser_map_state.is_empty():
-		return map_view.size * 0.5
-	var center: Array = browser_map_state.get("center", [DEFAULT_CITY_CENTER.x, DEFAULT_CITY_CENTER.y])
-	if center.size() < 2:
-		return map_view.size * 0.5
-	var zoom := float(browser_map_state.get("zoom", DEFAULT_CITY_ZOOM))
-	var world_size := 512.0 * pow(2.0, zoom)
-	var point_world := Vector2(_mercator_x(lon_lat.x), _mercator_y(lon_lat.y)) * world_size
-	var center_world := Vector2(_mercator_x(float(center[0])), _mercator_y(float(center[1]))) * world_size
-	var delta := point_world - center_world
-	if delta.x > world_size * 0.5:
-		delta.x -= world_size
-	elif delta.x < -world_size * 0.5:
-		delta.x += world_size
-	return map_view.size * 0.5 + delta
+## Push simulation-owned geographic coordinates to MapLibre. MapLibre owns
+## projection and camera transforms; Godot never paints map-world overlays in
+## screen coordinates while the geographic map is active.
+func _sync_geographic_overlays() -> void:
+	if not _maplibre_active() or not _maplibre_ready():
+		return
+	if not _javascript_truth(_maplibre_call("Boolean(window.IDMMap && window.IDMMap.setGameplayOverlays && window.IDMMap.setRiderPositions)")):
+		return
+	var selected := _find_order(selected_order)
+	var signature_data: Array = [selected_order]
+	for order in orders:
+		signature_data.append([
+			int(order.get("id", -1)), str(order.get("status", "")),
+			str(order.get("service_type", "parcel_logistics")),
+			Vector2(order.get("pickup", Vector2.ZERO)), Vector2(order.get("destination", Vector2.ZERO)),
+		])
+	var static_signature := JSON.stringify(signature_data)
+	var rider_features: Array[Dictionary] = []
+	for rider in riders:
+		var rider_uv: Vector2 = rider.get("position", Vector2.ZERO)
+		var rider_geo := geographic_service.uv_to_geo(rider_uv)
+		var rider_id := int(rider.get("id", -1))
+		rider_features.append({
+			"id": "rider-%d" % rider_id,
+			"kind": "rider_active" if str(rider.get("status", "ready")) == "busy" else "rider_available",
+			"label": "R",
+			"status": str(rider.get("status", "ready")),
+			"selected": not selected.is_empty() and int(selected.get("rider", -1)) == rider_id,
+			"coordinates": [rider_geo.x, rider_geo.y],
+		})
+	if static_signature == geographic_static_overlay_signature:
+		# Rider positions change every simulation frame; keep those updates small
+		# and synchronous while leaving road geometry in MapLibre's GeoJSON source.
+		_maplibre_call("window.IDMMap.setRiderPositions(%s)" % JSON.stringify(rider_features))
+		return
+	var route_features: Array[Dictionary] = []
+	var marker_features: Array[Dictionary] = []
+	var selected_sim: IDMRouteSimulation
+	if not selected.is_empty():
+		selected_sim = route_simulations.get(int(selected.get("rider", -1)))
+	if selected_sim != null and selected_sim.is_active():
+		for phase_info in [
+			{"id": "pickup", "route": selected_sim.pickup_route},
+			{"id": "delivery", "route": selected_sim.dropoff_route},
+		]:
+			var coordinates: Array = []
+			for point_value in phase_info["route"].get("points", []):
+				var geo := geographic_service.uv_to_geo(Vector2(point_value))
+				coordinates.append([geo.x, geo.y]) # GeoJSON is [longitude, latitude].
+			if coordinates.size() >= 2:
+				route_features.append({
+					"id": "booking-%d-%s" % [int(selected["id"]), str(phase_info["id"])],
+					"phase": str(phase_info["id"]),
+					"selected": true,
+					"coordinates": coordinates,
+				})
+	var selected_id := int(selected.get("id", -1)) if not selected.is_empty() else -1
+	for order in orders:
+		if str(order.get("status", "")) in ["Delivered", "Cancelled"]:
+			continue
+		var order_id := int(order.get("id", -1))
+		var is_selected := order_id == selected_id
+		var destination_uv: Vector2 = order.get("destination", Vector2.ZERO)
+		var destination := geographic_service.uv_to_geo(destination_uv)
+		var active := str(order.get("status", "")).begins_with("On route")
+		marker_features.append({
+			"id": "booking-%d-destination" % order_id,
+			"kind": "destination" if active else _booking_marker_kind(str(order.get("service_type", "parcel_logistics"))),
+			"label": "D" if active else IDMServicePricing.marker(str(order.get("service_type", "parcel_logistics"))),
+			"service": str(order.get("service_type", "parcel_logistics")),
+			"status": str(order.get("status", "Waiting")),
+			"selected": is_selected,
+			"bookingId": order_id,
+			"coordinates": [destination.x, destination.y],
+		})
+		if is_selected:
+			var pickup_uv: Vector2 = order.get("pickup", destination_uv)
+			var pickup := geographic_service.uv_to_geo(pickup_uv)
+			marker_features.append({
+				"id": "booking-%d-pickup" % order_id,
+				"kind": "pickup",
+				"label": "P",
+				"status": str(order.get("status", "Waiting")),
+				"selected": true,
+				"bookingId": order_id,
+				"coordinates": [pickup.x, pickup.y],
+			})
+	marker_features.append_array(rider_features)
+	var payload := {"routes": route_features, "markers": marker_features}
+	_maplibre_call("window.IDMMap.setGameplayOverlays(%s)" % JSON.stringify(payload))
+	geographic_static_overlay_signature = static_signature
 
-func _mercator_x(lon: float) -> float:
-	return (lon + 180.0) / 360.0
-
-func _mercator_y(lat: float) -> float:
-	var bounded := clampf(lat, -85.051129, 85.051129)
-	var radians := deg_to_rad(bounded)
-	return (1.0 - log(tan(radians) + 1.0 / cos(radians)) / PI) * 0.5
+func _booking_marker_kind(service_id: String) -> String:
+	match service_id:
+		"food_delivery": return "booking_food"
+		"parcel_logistics": return "booking_parcel"
+		"e_hailing": return "booking_passenger"
+		"express_logistics": return "booking_express"
+		_: return "booking_parcel"
 
 func _sync_map_input_blockers() -> void:
 	browser_block_rects.clear()
@@ -728,6 +815,11 @@ func _safe_value(bridge: Object, side: String) -> float:
 func _sheet_title() -> String:
 	match selected_tab:
 		"Map":
+			var selected := _find_order(selected_order)
+			if not selected.is_empty():
+				var service := IDMServicePricing.short_label(str(selected.get("service_type", "parcel_logistics")))
+				var state := str(selected.get("status", "Waiting")).to_upper()
+				return "%s  ·  BOOKING %03d  ·  %s" % [service, int(selected.get("id", 0)), state]
 			if sheet_expanded:
 				return "KL + SELANGOR  ·  OPENSTREETMAP" if geographic_map_available and not legacy_map_mode else "PARCELS  ·  FICTIONAL CITY MAP"
 			return "%d BOOKINGS WAITING  ·  TAP A PIN" % _waiting_count()
@@ -1012,8 +1104,32 @@ func _stop_follow_for_manual_gesture() -> void:
 	if map_camera.follow_enabled:
 		map_camera.follow_enabled = false
 		followed_rider_id = -1
+		_maplibre_call("window.IDMMap && window.IDMMap.stopFollow()")
+		_update_follow_button()
+
+func _update_follow_button() -> void:
+	if not is_instance_valid(follow_rider_button):
+		return
+	follow_rider_button.text = "Stop" if map_camera.follow_enabled else "Follow"
+	follow_rider_button.tooltip_text = "Exit rider follow mode" if map_camera.follow_enabled else "Follow selected delivery partner"
 
 func _select_marker(point: Vector2) -> void:
+	if _maplibre_active():
+		var raw: Variant = _maplibre_call("JSON.stringify(window.IDMMap.pickBookingAt(%s, %s) || null)" % [JSON.stringify(point.x), JSON.stringify(point.y)])
+		if not raw is String or raw in ["", "null", "<null>"]:
+			return
+		var parsed := JSON.new()
+		if parsed.parse(raw) != OK or typeof(parsed.data) != TYPE_DICTIONARY:
+			return
+		var booking_id := int(parsed.data.get("bookingId", -1))
+		var booking := _find_order(booking_id)
+		if booking.is_empty() or str(booking.get("status", "")) != "Waiting":
+			return
+		selected_order = booking_id
+		sheet_expanded = true
+		status_label.text = ""
+		_refresh()
+		return
 	var map_rect := _map_content_rect(map_view.size)
 	for order in orders:
 		if order["status"] == "Waiting":
@@ -1317,15 +1433,24 @@ func _toggle_pause() -> void:
 	paused = not paused
 	pause_button.text = "Resume" if paused else "Pause"
 	status_label.text = "Simulation paused" if paused else "Operations resumed"
+	_update_sim_controls()
 	_save_game()
 
 func _set_speed(value: int) -> void:
 	speed = value
 	status_label.text = "Simulation speed: %d×" % speed
+	_update_sim_controls()
+	_save_game()
+
+func _update_sim_controls() -> void:
+	if is_instance_valid(available_label):
+		available_label.text = "%d×  ·  %s" % [speed, "PAUSED" if paused else "LIVE"]
+	if is_instance_valid(pause_button):
+		pause_button.text = "Resume" if paused else "Pause"
 	for factor in speed_buttons:
 		var button: Button = speed_buttons[factor]
-		button.modulate = Color("#69e4fa") if factor == speed else Color.WHITE
-	_save_game()
+		button.modulate = Color("#57d9e8") if int(factor) == speed else Color.WHITE
+		button.tooltip_text = "Current speed %d times" % int(factor) if int(factor) == speed else "Set simulation speed to %d times" % int(factor)
 
 func _find_order(order_id: int) -> Dictionary:
 	for order in orders:
@@ -1333,15 +1458,46 @@ func _find_order(order_id: int) -> Dictionary:
 			return order
 	return {}
 
-func _fit_selected_route(simulation: IDMRouteSimulation) -> void:
-	if not _maplibre_active() or simulation == null or not simulation.is_active():
+func _fit_selected_booking() -> void:
+	if not _maplibre_active():
+		status_label.text = "Route fitting is available on the geographic map."
 		return
-	var points: Array = []
-	var route: Dictionary = simulation.pickup_route if simulation.phase == IDMRouteSimulation.PHASE_PICKUP else simulation.dropoff_route
-	for uv_value in route.get("points", []):
-		var geo := geographic_service.uv_to_geo(Vector2(uv_value))
-		points.append([geo.x, geo.y])
-	_maplibre_call("window.IDMMap.fitRoute(%s, 500)" % JSON.stringify(points))
+	var selected := _find_order(selected_order)
+	if selected.is_empty():
+		status_label.text = "Select a booking to fit its route."
+		_refresh()
+		return
+	var route_points: Array = []
+	var simulation: IDMRouteSimulation = route_simulations.get(int(selected.get("rider", -1)))
+	if simulation != null and simulation.is_active():
+		for route in [simulation.pickup_route, simulation.dropoff_route]:
+			for uv_value in route.get("points", []):
+				var geo := geographic_service.uv_to_geo(Vector2(uv_value))
+				route_points.append([geo.x, geo.y])
+	else:
+		var pickup: Vector2 = selected.get("pickup", Vector2.ZERO)
+		var destination: Vector2 = selected.get("destination", Vector2.ZERO)
+		var route := road_router.route_between_uv(pickup, destination)
+		if route.get("ok", false):
+			for uv_value in route.get("points", []):
+				var geo := geographic_service.uv_to_geo(Vector2(uv_value))
+				route_points.append([geo.x, geo.y])
+	if route_points.size() >= 2:
+		_maplibre_call("window.IDMMap.fitRoute(%s, 500)" % JSON.stringify(route_points))
+	else:
+		status_label.text = "No connected road route is available for this booking."
+		_refresh()
+
+func _follow_selected_rider() -> void:
+	if map_camera.follow_enabled and followed_rider_id >= 0:
+		_toggle_follow(followed_rider_id)
+		return
+	var selected := _find_order(selected_order)
+	if selected.is_empty() or not str(selected.get("status", "")).begins_with("On route"):
+		status_label.text = "Select an active delivery to follow its partner."
+		_refresh()
+		return
+	_toggle_follow(int(selected.get("rider", -1)))
 
 func _refresh() -> void:
 	if not is_instance_valid(order_list):
@@ -1349,10 +1505,12 @@ func _refresh() -> void:
 	cash_label.text = "RM%0.2f" % cash
 	active_jobs_label.text = "ACTIVE  %d" % _busy_count()
 	pending_jobs_label.text = "ORDERS  %d" % _waiting_count()
+	_update_sim_controls()
 	if selected_tab == "Map" and status_label.text == "" and _find_order(selected_order).is_empty():
 		status_label.text = "Tap a booking pin to review and dispatch."
 	for child in order_list.get_children():
 		child.queue_free()
+	_sync_geographic_overlays()
 	var subtabs: HBoxContainer = sheet_content.find_child("Subtabs", true, false)
 	if is_instance_valid(subtabs):
 		for child in subtabs.get_children():
@@ -1374,20 +1532,26 @@ func _refresh() -> void:
 		"Map":
 			var selected := _find_order(selected_order)
 			if not selected.is_empty() and selected["status"] == "Waiting":
-				if float(selected.get("route_distance_km", 0.0)) > 0.0:
-					var eta_minutes := int(ceil(float(selected.get("route_eta_seconds", 0.0)) / 60.0))
-					order_list.add_child(_label("%s %03d  ·  %.1f km  ·  ~%d min" % [IDMServicePricing.short_label(str(selected.get("service_type", "parcel_logistics"))), selected["id"], float(selected["route_distance_km"]), eta_minutes], 13, "#a8bac8"))
-				else:
-					order_list.add_child(_label("%s %03d" % [IDMServicePricing.short_label(str(selected.get("service_type", "parcel_logistics"))), selected["id"]], 13, "#91a8ba"))
-				var payout := _label("RM%.2f estimated fare" % float(selected["payout"]), 20, "#f1f6fa")
-				payout.add_theme_font_size_override("font_size", int(round(20.0 * ui_scale)))
-				order_list.add_child(payout)
+				var eta_minutes := int(ceil(float(selected.get("route_eta_seconds", 0.0)) / 60.0))
+				var service_name := IDMServicePricing.short_label(str(selected.get("service_type", "parcel_logistics")))
+				var compact_eta := "  ·  ~%d min" % eta_minutes if eta_minutes > 0 else ""
+				order_list.add_child(_label("%s  ·  WAITING  ·  RM%.2f%s" % [service_name, float(selected.get("payout", 0.0)), compact_eta], 11, "#a8bac8"))
+				if sheet_expanded:
+					var pickup_uv: Vector2 = selected.get("pickup", Vector2.ZERO)
+					var destination_uv: Vector2 = selected.get("destination", Vector2.ZERO)
+					var pickup_geo := geographic_service.uv_to_geo(pickup_uv)
+					var destination_geo := geographic_service.uv_to_geo(destination_uv)
+					order_list.add_child(_label("Pickup  %.5f, %.5f" % [pickup_geo.y, pickup_geo.x], 10, "#a8bac8"))
+					order_list.add_child(_label("Drop-off  %.5f, %.5f" % [destination_geo.y, destination_geo.x], 10, "#a8bac8"))
+					if float(selected.get("route_distance_km", 0.0)) > 0.0:
+						order_list.add_child(_label("Road  %.1f km  ·  ETA  ~%d min" % [float(selected["route_distance_km"]), eta_minutes], 10, "#a8bac8"))
 				var quote: Dictionary = selected.get("price_quote", {})
-				if not quote.is_empty():
-					order_list.add_child(_label("Base RM%.2f  +  distance RM%.2f  +  time RM%.2f" % [float(quote.get("base_rm", 0.0)), float(quote.get("distance_rm", 0.0)), float(quote.get("time_rm", 0.0))], 10, "#91a8ba"))
-				order_list.add_child(_label("Automatic simulated fare · not an official rate", 10, "#91a8ba"))
+				if sheet_expanded and not quote.is_empty():
+					order_list.add_child(_label("Fare RM%.2f  ·  base %.2f + distance %.2f + time %.2f" % [float(selected["payout"]), float(quote.get("base_rm", 0.0)), float(quote.get("distance_rm", 0.0)), float(quote.get("time_rm", 0.0))], 10, "#c4d3dd"))
+				elif sheet_expanded:
+					order_list.add_child(_label("Estimated fare RM%.2f" % float(selected["payout"]), 12, "#c4d3dd"))
 				var dispatch := _button("Dispatch rider", func(): _dispatch(selected["id"]))
-				dispatch.custom_minimum_size.y = _ui_size(50)
+				dispatch.custom_minimum_size.y = _ui_size(46)
 				dispatch.add_theme_color_override("font_color", Color("#04252d"))
 				var dispatch_style := StyleBoxFlat.new()
 				dispatch_style.bg_color = Color("#48d9e9")
@@ -1395,24 +1559,20 @@ func _refresh() -> void:
 				dispatch.add_theme_stylebox_override("normal", dispatch_style)
 				order_list.add_child(dispatch)
 			elif not selected.is_empty() and str(selected["status"]).begins_with("On route"):
-				order_list.add_child(_label("%s %03d  ·  %s" % [IDMServicePricing.short_label(str(selected.get("service_type", "parcel_logistics"))), selected["id"], str(selected["status"]).to_upper()], 15, "#f1f6fa"))
+				var route_service := IDMServicePricing.short_label(str(selected.get("service_type", "parcel_logistics")))
+				var route_state := str(selected["status"]).to_upper()
+				order_list.add_child(_label("%s  ·  %s" % [route_service, route_state], 12, "#a8bac8"))
 				var route_rider_id := int(selected.get("rider", -1))
 				var route_sim: IDMRouteSimulation = route_simulations.get(route_rider_id)
 				if route_sim != null and route_sim.is_active():
 					var eta := route_sim.estimated_remaining_seconds(float(speed))
 					var eta_text := "ETA paused" if paused or eta < 0.0 else "ETA %d min" % int(ceil(eta / 60.0))
-					order_list.add_child(_label("%.1f km total  ·  %.1f km remaining  ·  %s" % [route_sim.total_distance_km(), route_sim.remaining_distance_km(), eta_text], 12, "#a8bac8"))
-					var follow_button := _button("Stop following" if map_camera.follow_enabled and followed_rider_id == route_rider_id else "Follow partner", func(): _toggle_follow(route_rider_id))
-					follow_button.custom_minimum_size.y = _ui_size(42)
-					order_list.add_child(follow_button)
-					var fit_button := _button("Fit route", func(): _fit_selected_route(route_sim))
-					fit_button.custom_minimum_size.y = _ui_size(42)
-					order_list.add_child(fit_button)
+					order_list.add_child(_label("%.1f km  ·  %.1f km remaining  ·  %s" % [route_sim.total_distance_km(), route_sim.remaining_distance_km(), eta_text], 11, "#a8bac8"))
 				else:
 					order_list.add_child(_label("The road route is being restored.", 13, "#a8bac8"))
 			else:
 				var waiting_count := _waiting_count()
-				var hint := _label("%d bookings waiting" % waiting_count if waiting_count > 0 else "Tap a booking pin to review", 16, "#f1f6fa")
+				var hint := _label("%d waiting  ·  tap a pin" % waiting_count if waiting_count > 0 else "Tap a booking pin to review", 12, "#f1f6fa")
 				order_list.add_child(hint)
 				if sheet_expanded:
 					var map_caption := "WORLD VIEW DATA UNAVAILABLE" if world_map else "OSM STREET MAP · KL/SELANGOR CORE" if geographic_map_available and not legacy_map_mode else "FICTIONAL CITY MAP · LEGACY SAVE"
@@ -1745,6 +1905,11 @@ func _draw_map() -> void:
 	else:
 		if not browser_active:
 			_draw_fictional_map_background(size)
+	# MapLibre owns geographic projection, line tessellation, culling, and marker
+	# placement. Painting a second copy here used a stale polled camera snapshot
+	# and drifted behind the continuously animated browser map.
+	if browser_active:
+		return
 	var selected_route_order := _find_order(selected_order)
 	var selected_sim: IDMRouteSimulation = route_simulations.get(int(selected_route_order.get("rider", -1))) if not selected_route_order.is_empty() else null
 	if selected_sim != null and selected_sim.is_active():
