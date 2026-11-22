@@ -839,6 +839,11 @@ func _layout_ui() -> void:
 		_set_button_variant(nav_button, "selected" if selected_button else "nav")
 	map_view.queue_redraw()
 	_sync_map_input_blockers()
+	# Keep the persistent navigation above a tall or expanded sheet. The sheet
+	# is deliberately allowed to grow for readable booking details, but must not
+	# make the four primary destinations visually or physically inaccessible.
+	if not main_menu_active and not is_instance_valid(save_overlay) and not is_instance_valid(new_game_confirmation) and not is_instance_valid(return_menu_confirmation):
+		bottom_nav.move_to_front()
 	if viewport_changed:
 		call_deferred("_refresh")
 		if main_menu_active:
