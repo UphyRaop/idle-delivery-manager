@@ -2,6 +2,8 @@ extends Control
 
 const LEGACY_SAVE_PATH := "user://delivery_ops_save.json"
 const ACTIVE_SAVE_MARKER := "user://idm_active_save.json"
+const WEB_SAVE_MIRROR_KEY := "idm_active_save_v1"
+const WEB_SAVE_PATH_KEY := "idm_active_save_path"
 var save_path := LEGACY_SAVE_PATH
 var save_recovery_required := false
 var recovery_overlay: ColorRect
@@ -87,15 +89,13 @@ func _ready() -> void:
 		_save_game()
 
 func _load_active_save_path() -> void:
-	if not FileAccess.file_exists(ACTIVE_SAVE_MARKER):
-		return
-	var marker := FileAccess.open(ACTIVE_SAVE_MARKER, FileAccess.READ)
-	if marker == null:
-		return
-	var parsed := JSON.new()
-	if parsed.parse(marker.get_as_text()) != OK or typeof(parsed.data) != TYPE_DICTIONARY:
-		return
-	var candidate := str(parsed.data.get("path", ""))
+	var candidate := str(_web_storage_get(WEB_SAVE_PATH_KEY))
+	if candidate == "" and FileAccess.file_exists(ACTIVE_SAVE_MARKER):
+		var marker := FileAccess.open(ACTIVE_SAVE_MARKER, FileAccess.READ)
+		if marker != null:
+			var parsed := JSON.new()
+			if parsed.parse(marker.get_as_text()) == OK and typeof(parsed.data) == TYPE_DICTIONARY:
+				candidate = str(parsed.data.get("path", ""))
 	if candidate == LEGACY_SAVE_PATH or (candidate.begins_with("user://delivery_ops_session_") and candidate.ends_with(".json")):
 		save_path = candidate
 
@@ -110,6 +110,8 @@ func _set_active_save_path(path: String) -> void:
 	var marker := FileAccess.open(ACTIVE_SAVE_MARKER, FileAccess.WRITE)
 	if marker != null:
 		marker.store_string(JSON.stringify({"path": path}))
+		marker.close()
+	_web_storage_set(WEB_SAVE_PATH_KEY, path)
 
 func _process(delta: float) -> void:
 	if save_recovery_required:
@@ -1192,9 +1194,6 @@ func _draw_fictional_map_background(size: Vector2) -> void:
 func _save_game() -> void:
 	if save_recovery_required:
 		return
-	var file := FileAccess.open(save_path, FileAccess.WRITE)
-	if file == null:
-		return
 	var data := {
 		"version": 1,
 		"map_space": "kl_selangor_web_mercator_uv" if geographic_map_available and not legacy_map_mode else "legacy_normalized",
@@ -1210,21 +1209,64 @@ func _save_game() -> void:
 		"elapsed": elapsed,
 		"speed": speed,
 	}
-	file.store_string(JSON.stringify(data))
+	var serialized := JSON.stringify(data)
+	var file := FileAccess.open(save_path, FileAccess.WRITE)
+	if file != null:
+		file.store_string(serialized)
+		file.close()
+	# Web IDBFS persistence completes asynchronously. This synchronous mirror
+	# keeps the latest autosave available if Safari/Chrome reloads before its
+	# IndexedDB transaction finishes; the versioned user:// file remains primary
+	# on native builds and a fallback on Web.
+	_web_storage_set(WEB_SAVE_MIRROR_KEY, JSON.stringify({"path": save_path, "data": data}))
+
+func _web_storage_get(key: String) -> Variant:
+	if not Engine.has_singleton("JavaScriptBridge"):
+		return null
+	var bridge: Object = Engine.get_singleton("JavaScriptBridge")
+	if bridge == null:
+		return null
+	return bridge.call("eval", "localStorage.getItem(" + JSON.stringify(key) + ")", true)
+
+func _web_storage_set(key: String, value: String) -> void:
+	if not Engine.has_singleton("JavaScriptBridge"):
+		return
+	var bridge: Object = Engine.get_singleton("JavaScriptBridge")
+	if bridge == null:
+		return
+	var code := "try { localStorage.setItem(" + JSON.stringify(key) + ", " + JSON.stringify(value) + "); true; } catch (error) { false; }"
+	bridge.call("eval", code, true)
+
+func _web_save_mirror() -> Dictionary:
+	var mirrored: Variant = _web_storage_get(WEB_SAVE_MIRROR_KEY)
+	if not mirrored is String or mirrored.is_empty():
+		return {}
+	var parsed := JSON.new()
+	if parsed.parse(mirrored) != OK or typeof(parsed.data) != TYPE_DICTIONARY:
+		return {}
+	var envelope: Dictionary = parsed.data
+	if str(envelope.get("path", "")) != save_path or not envelope.get("data", {}) is Dictionary:
+		return {}
+	var data: Dictionary = envelope["data"]
+	if int(data.get("version", 0)) != 1 or not data.get("riders", []) is Array or not data.get("orders", []) is Array:
+		return {}
+	return data
 
 func _load_game() -> void:
-	if not FileAccess.file_exists(save_path):
-		_new_game()
-		return
-	var file := FileAccess.open(save_path, FileAccess.READ)
-	if file == null:
-		save_recovery_required = true
-		return
-	var parsed := JSON.new()
-	if parsed.parse(file.get_as_text()) != OK or typeof(parsed.data) != TYPE_DICTIONARY:
-		save_recovery_required = true
-		return
-	var data: Dictionary = parsed.data
+	var data := _web_save_mirror()
+	if data.is_empty():
+		if not FileAccess.file_exists(save_path):
+			_new_game()
+			return
+		var file := FileAccess.open(save_path, FileAccess.READ)
+		if file == null:
+			save_recovery_required = true
+			return
+		var parsed := JSON.new()
+		if parsed.parse(file.get_as_text()) != OK or typeof(parsed.data) != TYPE_DICTIONARY:
+			save_recovery_required = true
+			return
+		data = parsed.data
 	if int(data.get("version", 0)) != 1:
 		save_recovery_required = true
 		return
