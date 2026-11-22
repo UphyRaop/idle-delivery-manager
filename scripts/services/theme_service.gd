@@ -46,8 +46,25 @@ func color(token: String) -> Color:
 		"status": "#53d5ba" if dark else "#16866d",
 		"rider": "#70e4f3" if dark else "#07889b",
 		"rider_back": "#06242e" if dark else "#d0eef2",
+		"surface": "#142c3b" if dark else "#eef5f7",
+		"selected": "#123c4a" if dark else "#d2f1f4",
+		"warning": "#f0b95b" if dark else "#986116",
+		"positive": "#53d5ba" if dark else "#16866d",
 	}
 	return Color(str(palette.get(token, "#091722")))
+
+## Shared UI rhythm and typography tokens in CSS-pixel equivalents.
+func space(token: String) -> int:
+	return {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 20}.get(token, 12)
+
+func font_size(token: String) -> int:
+	return {"caption": 11, "body": 14, "section": 16, "title": 20, "metric": 18}.get(token, 14)
+
+func corner_radius(token: String) -> int:
+	return {"control": 12, "card": 16, "sheet": 22, "pill": 999}.get(token, 14)
+
+func control_height(token: String) -> int:
+	return {"compact": 44, "standard": 48, "large": 52}.get(token, 48)
 
 func resolve_existing_text(original: Color) -> Color:
 	if mode == "dark":

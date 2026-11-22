@@ -52,6 +52,7 @@ var pause_button: Button
 var speed_buttons: Dictionary = {}
 var sheet: PanelContainer
 var sheet_content: VBoxContainer
+var sheet_body: ScrollContainer
 var sheet_toggle_button: Button
 var sheet_header_label: Label
 var map_controls: GridContainer
@@ -59,6 +60,8 @@ var fit_route_button: Button
 var follow_rider_button: Button
 var bottom_nav: PanelContainer
 var nav_buttons: Dictionary = {}
+var nav_labels: Dictionary = {}
+var nav_icons: Dictionary = {}
 var hud: PanelContainer
 var sim_controls: PanelContainer
 var selected_tab := "Map"
@@ -386,11 +389,18 @@ func _build_ui() -> void:
 	subtabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	subtabs.name = "Subtabs"
 	sheet_content.add_child(subtabs)
+	sheet_body = ScrollContainer.new()
+	sheet_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	sheet_body.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	sheet_body.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	sheet_body.mouse_filter = Control.MOUSE_FILTER_STOP
+	sheet_content.add_child(sheet_body)
 	order_list = VBoxContainer.new()
+	order_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	order_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	order_list.custom_minimum_size.y = 24
 	order_list.add_theme_constant_override("separation", 3)
-	sheet_content.add_child(order_list)
+	sheet_body.add_child(order_list)
 	status_label = Label.new()
 	status_label.add_theme_font_size_override("font_size", 13)
 	status_label.add_theme_color_override("font_color", Color("#53d5ba"))
@@ -408,21 +418,40 @@ func _build_ui() -> void:
 	bottom_nav.add_child(nav_row)
 	for name in ["Map", "Operations", "Finance", "Settings"]:
 		var internal_tab: String = name
-		var button := _button(name, func(): _set_tab(internal_tab))
+		var button := _button("", func(): _set_tab(internal_tab))
+		button.tooltip_text = name
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.custom_minimum_size = Vector2(0, 56)
-		button.add_theme_font_size_override("font_size", 14)
+		var nav_content := HBoxContainer.new()
+		nav_content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		nav_content.alignment = BoxContainer.ALIGNMENT_CENTER
+		nav_content.add_theme_constant_override("separation", 4)
+		nav_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		button.add_child(nav_content)
+		var icon := Control.new()
+		icon.custom_minimum_size = Vector2(16, 16)
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		icon.draw.connect(func(): _draw_nav_icon(icon, internal_tab, button))
+		nav_content.add_child(icon)
+		var nav_label := Label.new()
+		nav_label.text = "Ops" if internal_tab == "Operations" else internal_tab
+		nav_label.add_theme_font_size_override("font_size", 12)
+		nav_label.add_theme_color_override("font_color", ThemeService.color("button_text"))
+		nav_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		nav_content.add_child(nav_label)
 		nav_buttons[internal_tab] = button
+		nav_labels[internal_tab] = nav_label
+		nav_icons[internal_tab] = icon
 		nav_row.add_child(button)
 
 func _panel_style(color: String, radius: int) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = ThemeService.color("panel")
 	style.set_corner_radius_all(radius)
-	style.content_margin_left = 12
-	style.content_margin_right = 12
-	style.content_margin_top = 8
-	style.content_margin_bottom = 8
+	style.content_margin_left = ThemeService.space("md")
+	style.content_margin_right = ThemeService.space("md")
+	style.content_margin_top = ThemeService.space("sm")
+	style.content_margin_bottom = ThemeService.space("sm")
 	style.border_width_left = 1
 	style.border_width_top = 1
 	style.border_width_right = 1
@@ -468,7 +497,11 @@ func _layout_ui() -> void:
 		follow_rider_button.text = "Stop" if map_camera.follow_enabled else "Follow"
 		follow_rider_button.tooltip_text = "Exit rider follow mode" if map_camera.follow_enabled else "Follow selected delivery partner"
 	for nav_button in nav_buttons.values():
-		nav_button.add_theme_font_size_override("font_size", int(round(14.0 * ui_scale)))
+		nav_button.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
+	for tab in nav_labels:
+		var nav_label: Label = nav_labels[tab]
+		nav_label.text = "Ops" if tab == "Operations" and viewport_size.x < 520.0 and not is_landscape else tab
+		nav_label.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
 	brand_label.add_theme_font_size_override("font_size", int(round(19.0 * ui_scale)))
 	active_jobs_label.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
 	pending_jobs_label.add_theme_font_size_override("font_size", int(round(11.0 * ui_scale)))
@@ -486,11 +519,18 @@ func _layout_ui() -> void:
 	var selected := _find_order(selected_order)
 	var order_detail_open: bool = selected_tab == "Map" and not selected.is_empty() and (selected["status"] == "Waiting" or str(selected["status"]).begins_with("On route"))
 	var nav_height: int = 76 if not is_landscape else 64
-	var sheet_height: int = 268 if sheet_expanded else 124
+	var sheet_height: int = 276 if sheet_expanded else 116
 	if is_landscape:
-		sheet_height = 218 if sheet_expanded else 116
+		sheet_height = 224 if sheet_expanded else 108
 	if is_desktop:
-		sheet_height = 268 if sheet_expanded else 124
+		sheet_height = 276 if sheet_expanded else 116
+	if selected_tab == "Settings" and sheet_expanded and not is_landscape:
+		sheet_height = 316
+	if selected_tab == "Map" and sheet_expanded:
+		if selected.is_empty():
+			sheet_height = 220 if not is_landscape else 190
+		elif str(selected.get("status", "")).begins_with("On route"):
+			sheet_height = 204 if not is_landscape else 176
 	var safe_left := safe_insets.x
 	var safe_top := safe_insets.y
 	var safe_right := safe_insets.z
@@ -568,7 +608,8 @@ func _layout_ui() -> void:
 			subtabs.visible = sheet_expanded and not order_detail_open
 			for subtab in subtabs.get_children():
 				subtab.custom_minimum_size.y = (40 if is_landscape and sheet_expanded else 46) * ui_layout_scale
-		order_list.visible = sheet_expanded or selected_tab == "Map"
+		sheet_body.visible = sheet_expanded or selected_tab == "Map"
+		order_list.visible = true
 		if not sheet_expanded and selected_tab == "Map":
 			for child in order_list.get_children():
 				child.visible = false
@@ -580,7 +621,7 @@ func _layout_ui() -> void:
 	for tab in nav_buttons:
 		var nav_button: Button = nav_buttons[tab]
 		var selected_button: bool = tab == selected_tab
-		nav_button.modulate = Color("#3bd5e8") if selected_button else Color("#dbe7ef")
+		_set_button_variant(nav_button, "selected" if selected_button else "nav")
 	map_view.queue_redraw()
 	_sync_map_input_blockers()
 	if viewport_changed:
@@ -1143,15 +1184,16 @@ func _select_marker(point: Vector2) -> void:
 func _button(label: String, callback: Callable) -> Button:
 	var button := Button.new()
 	button.text = label
-	button.custom_minimum_size.y = _ui_size(46)
+	button.set_meta("ui_variant", "default")
+	button.custom_minimum_size.y = _ui_size(ThemeService.control_height("compact"))
 	button.pressed.connect(callback)
-	button.add_theme_font_size_override("font_size", int(round(15.0 * ui_scale)))
+	button.add_theme_font_size_override("font_size", int(round(14.0 * ui_scale)))
 	button.add_theme_color_override("font_color", ThemeService.color("button_text"))
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = ThemeService.color("button")
-	normal.set_corner_radius_all(14)
-	normal.content_margin_left = 10
-	normal.content_margin_right = 10
+	normal.set_corner_radius_all(ThemeService.corner_radius("control"))
+	normal.content_margin_left = ThemeService.space("sm")
+	normal.content_margin_right = ThemeService.space("sm")
 	normal.content_margin_top = 5
 	normal.content_margin_bottom = 5
 	button.add_theme_stylebox_override("normal", normal)
@@ -1166,6 +1208,58 @@ func _button(label: String, callback: Callable) -> Button:
 	button.add_theme_stylebox_override("disabled", disabled)
 	button.add_theme_color_override("font_disabled_color", ThemeService.color("muted"))
 	return button
+
+func _set_button_variant(button: Button, variant: String) -> void:
+	if not is_instance_valid(button):
+		return
+	button.set_meta("ui_variant", variant)
+	var normal := StyleBoxFlat.new()
+	match variant:
+		"selected": normal.bg_color = ThemeService.color("selected")
+		"action": normal.bg_color = ThemeService.color("accent_fill")
+		"quiet": normal.bg_color = ThemeService.color("panel")
+		_: normal.bg_color = ThemeService.color("button")
+	normal.set_corner_radius_all(ThemeService.corner_radius("control"))
+	normal.content_margin_left = ThemeService.space("sm")
+	normal.content_margin_right = ThemeService.space("sm")
+	button.add_theme_stylebox_override("normal", normal)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = ThemeService.color("button_hover")
+	button.add_theme_stylebox_override("hover", hover)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = ThemeService.color("accent_fill")
+	button.add_theme_stylebox_override("pressed", pressed)
+	button.add_theme_color_override("font_color", Color("#04252d") if variant == "action" else ThemeService.color("button_text"))
+	for icon in nav_icons.values():
+		if is_instance_valid(icon):
+			icon.queue_redraw()
+
+func _draw_nav_icon(icon: Control, kind: String, button: Button) -> void:
+	var variant := str(button.get_meta("ui_variant", "default"))
+	var color := ThemeService.color("accent") if variant == "selected" else ThemeService.color("muted")
+	var points: PackedVector2Array
+	match kind:
+		"Map":
+			points = PackedVector2Array([Vector2(2, 3), Vector2(6, 2), Vector2(10, 4), Vector2(14, 2), Vector2(14, 13), Vector2(10, 15), Vector2(6, 13), Vector2(2, 15), Vector2(2, 3)])
+			icon.draw_polyline(points, color, 1.6, true)
+			icon.draw_line(Vector2(6, 2), Vector2(6, 13), color, 1.2, true)
+			icon.draw_line(Vector2(10, 4), Vector2(10, 15), color, 1.2, true)
+		"Operations":
+			icon.draw_rect(Rect2(2, 3, 12, 11), color, false, 1.5)
+			icon.draw_line(Vector2(2, 7), Vector2(14, 7), color, 1.4, true)
+			icon.draw_line(Vector2(6, 1.5), Vector2(6, 4), color, 1.4, true)
+			icon.draw_line(Vector2(10, 1.5), Vector2(10, 4), color, 1.4, true)
+		"Finance":
+			icon.draw_line(Vector2(2, 14), Vector2(14, 14), color, 1.4, true)
+			icon.draw_rect(Rect2(3, 8, 2.5, 6), color, true)
+			icon.draw_rect(Rect2(7.5, 5, 2.5, 9), color, true)
+			icon.draw_rect(Rect2(12, 2, 2.5, 12), color, true)
+		"Settings":
+			icon.draw_circle(Vector2(8, 8), 5.2, color, false, 1.5, true)
+			icon.draw_circle(Vector2(8, 8), 1.8, color, false, 1.4, true)
+			for angle in range(0, 360, 45):
+				var direction := Vector2.RIGHT.rotated(deg_to_rad(float(angle)))
+				icon.draw_line(Vector2(8, 8) + direction * 6.0, Vector2(8, 8) + direction * 7.5, color, 1.5, true)
 
 func _on_theme_changed(_mode: String) -> void:
 	_load_map_texture()
@@ -1182,14 +1276,8 @@ func _apply_theme_to_ui() -> void:
 		node.add_theme_stylebox_override("panel", style)
 	for node in find_children("*", "Button", true, false):
 		var button: Button = node
-		var is_action := button.text.contains("Dispatch")
-		var normal: StyleBoxFlat = button.get_theme_stylebox("normal").duplicate() as StyleBoxFlat
-		normal.bg_color = ThemeService.color("accent_fill") if is_action else ThemeService.color("button")
-		button.add_theme_stylebox_override("normal", normal)
-		var hover: StyleBoxFlat = button.get_theme_stylebox("hover").duplicate() as StyleBoxFlat
-		hover.bg_color = ThemeService.color("accent_fill") if is_action else ThemeService.color("button_hover")
-		button.add_theme_stylebox_override("hover", hover)
-		button.add_theme_color_override("font_color", ThemeService.color("button_text") if not is_action else Color("#04252d"))
+		var variant := str(button.get_meta("ui_variant", "default"))
+		_set_button_variant(button, variant)
 	for node in find_children("*", "Label", true, false):
 		var label: Label = node
 		label.add_theme_color_override("font_color", ThemeService.resolve_existing_text(label.get_theme_color("font_color")))
@@ -1449,7 +1537,7 @@ func _update_sim_controls() -> void:
 		pause_button.text = "Resume" if paused else "Pause"
 	for factor in speed_buttons:
 		var button: Button = speed_buttons[factor]
-		button.modulate = Color("#57d9e8") if int(factor) == speed else Color.WHITE
+		_set_button_variant(button, "selected" if int(factor) == speed else "default")
 		button.tooltip_text = "Current speed %d times" % int(factor) if int(factor) == speed else "Set simulation speed to %d times" % int(factor)
 
 func _find_order(order_id: int) -> Dictionary:
@@ -1502,7 +1590,7 @@ func _follow_selected_rider() -> void:
 func _refresh() -> void:
 	if not is_instance_valid(order_list):
 		return
-	cash_label.text = "RM%0.2f" % cash
+	cash_label.text = _format_rm(cash)
 	active_jobs_label.text = "ACTIVE  %d" % _busy_count()
 	pending_jobs_label.text = "ORDERS  %d" % _waiting_count()
 	_update_sim_controls()
@@ -1525,8 +1613,7 @@ func _refresh() -> void:
 			var subtab := _button(option, func(): _set_subtab(option))
 			subtab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			subtab.custom_minimum_size = Vector2(0, _ui_size(46))
-			if option == selected_subtab:
-				subtab.modulate = Color("#43d6e8")
+			_set_button_variant(subtab, "selected" if option == selected_subtab else "quiet")
 			subtabs.add_child(subtab)
 	match selected_tab:
 		"Map":
@@ -1535,7 +1622,7 @@ func _refresh() -> void:
 				var eta_minutes := int(ceil(float(selected.get("route_eta_seconds", 0.0)) / 60.0))
 				var service_name := IDMServicePricing.short_label(str(selected.get("service_type", "parcel_logistics")))
 				var compact_eta := "  ·  ~%d min" % eta_minutes if eta_minutes > 0 else ""
-				order_list.add_child(_label("%s  ·  WAITING  ·  RM%.2f%s" % [service_name, float(selected.get("payout", 0.0)), compact_eta], 11, "#a8bac8"))
+				order_list.add_child(_label("%s  ·  WAITING  ·  %s%s" % [service_name, _format_rm(float(selected.get("payout", 0.0))), compact_eta], 11, "#a8bac8"))
 				if sheet_expanded:
 					var pickup_uv: Vector2 = selected.get("pickup", Vector2.ZERO)
 					var destination_uv: Vector2 = selected.get("destination", Vector2.ZERO)
@@ -1547,16 +1634,15 @@ func _refresh() -> void:
 						order_list.add_child(_label("Road  %.1f km  ·  ETA  ~%d min" % [float(selected["route_distance_km"]), eta_minutes], 10, "#a8bac8"))
 				var quote: Dictionary = selected.get("price_quote", {})
 				if sheet_expanded and not quote.is_empty():
-					order_list.add_child(_label("Fare RM%.2f  ·  base %.2f + distance %.2f + time %.2f" % [float(selected["payout"]), float(quote.get("base_rm", 0.0)), float(quote.get("distance_rm", 0.0)), float(quote.get("time_rm", 0.0))], 10, "#c4d3dd"))
+					order_list.add_child(_label("Fare  %s" % _format_rm(float(selected["payout"])), 13, "#f1f6fa"))
+					var fare_breakdown := _label("Base %s   Distance %s   Time %s" % [_format_rm(float(quote.get("base_rm", 0.0))), _format_rm(float(quote.get("distance_rm", 0.0))), _format_rm(float(quote.get("time_rm", 0.0)))], 10, "#c4d3dd")
+					fare_breakdown.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+					order_list.add_child(fare_breakdown)
 				elif sheet_expanded:
-					order_list.add_child(_label("Estimated fare RM%.2f" % float(selected["payout"]), 12, "#c4d3dd"))
+					order_list.add_child(_label("Estimated fare  %s" % _format_rm(float(selected["payout"])), 12, "#c4d3dd"))
 				var dispatch := _button("Dispatch rider", func(): _dispatch(selected["id"]))
 				dispatch.custom_minimum_size.y = _ui_size(46)
-				dispatch.add_theme_color_override("font_color", Color("#04252d"))
-				var dispatch_style := StyleBoxFlat.new()
-				dispatch_style.bg_color = Color("#48d9e9")
-				dispatch_style.set_corner_radius_all(15)
-				dispatch.add_theme_stylebox_override("normal", dispatch_style)
+				_set_button_variant(dispatch, "action")
 				order_list.add_child(dispatch)
 			elif not selected.is_empty() and str(selected["status"]).begins_with("On route"):
 				var route_service := IDMServicePricing.short_label(str(selected.get("service_type", "parcel_logistics")))
@@ -1579,52 +1665,66 @@ func _refresh() -> void:
 					order_list.add_child(_label(map_caption, 12, "#91a8ba"))
 		"Operations":
 			if selected_subtab == "Fleet":
-				var ready_label := _label("%d READY" % _ready_count(), 20, "#f1f6fa")
-				order_list.add_child(ready_label)
-				order_list.add_child(_label("%d on route   ·   %d total partners" % [_busy_count(), riders.size()], 13, "#a8bac8"))
-				var hire := _button("+   Recruit partner  ·  RM120", _hire_rider)
-				hire.custom_minimum_size.y = _ui_size(50)
+				order_list.add_child(_label("PARTNER NETWORK", 11, "#91a8ba"))
+				var fleet_row := HBoxContainer.new()
+				fleet_row.add_theme_constant_override("separation", 6)
+				order_list.add_child(fleet_row)
+				fleet_row.add_child(_metric_card("AVAILABLE", str(_ready_count())))
+				fleet_row.add_child(_metric_card("ON ROUTE", str(_busy_count())))
+				fleet_row.add_child(_metric_card("TOTAL", str(riders.size())))
+				var hire := _button("Recruit partner  ·  %s" % _format_rm(120.0), _hire_rider)
+				hire.custom_minimum_size.y = _ui_size(ThemeService.control_height("standard"))
 				hire.disabled = cash < 120
+				_set_button_variant(hire, "action")
 				order_list.add_child(hire)
 			else:
-				order_list.add_child(_label("OPERATIONS  ·  PHASE 1", 13, "#91a8ba"))
-				order_list.add_child(_label("%d active partners" % riders.size(), 20, "#f1f6fa"))
-				order_list.add_child(_label("%d deliveries completed" % delivered, 14, "#a8bac8"))
+				order_list.add_child(_label("COMPANY SNAPSHOT", 11, "#91a8ba"))
+				var company_row := HBoxContainer.new()
+				company_row.add_theme_constant_override("separation", 6)
+				order_list.add_child(company_row)
+				company_row.add_child(_metric_card("PARTNERS", str(riders.size())))
+				company_row.add_child(_metric_card("DELIVERIES", str(delivered)))
+				order_list.add_child(_label("Service network  ·  Malaysia", 12, "#a8bac8"))
 		"Finance":
 			if selected_subtab == "Statements":
-				order_list.add_child(_label("Legacy prototype totals; ledger migration is not complete.", 12, "#91a8ba"))
+				order_list.add_child(_label("FINANCIAL SUMMARY  ·  ALL AMOUNTS IN RM", 11, "#91a8ba"))
 			var metrics_row := HBoxContainer.new()
 			metrics_row.add_theme_constant_override("separation", 8)
 			order_list.add_child(metrics_row)
-			metrics_row.add_child(_metric_card("BALANCE", "RM%0.0f" % cash))
-			metrics_row.add_child(_metric_card("REVENUE", "RM%0.0f" % revenue_total))
+			metrics_row.add_child(_metric_card("AVAILABLE CASH", _format_rm(cash)))
+			metrics_row.add_child(_metric_card("TOTAL REVENUE", _format_rm(revenue_total)))
 			var totals_row := HBoxContainer.new()
 			totals_row.add_theme_constant_override("separation", 8)
 			order_list.add_child(totals_row)
-			totals_row.add_child(_metric_card("OPERATING COST", "RM%0.0f" % cost_total))
-			totals_row.add_child(_metric_card("DELIVERIES", str(delivered)))
+			totals_row.add_child(_metric_card("OPERATING COST", _format_rm(cost_total)))
+			totals_row.add_child(_metric_card("COMPLETED JOBS", str(delivered)))
+			order_list.add_child(_label("Revenue and costs reflect completed deliveries in this save.", 11, "#91a8ba"))
 		"Settings":
 			if selected_subtab == "Preferences":
-				order_list.add_child(_label("Appearance", 16, "#f1f6fa"))
-				order_list.add_child(_label("Choose a readable map and panel theme.", 13, "#a8bac8"))
+				order_list.add_child(_label("APPEARANCE", 11, "#91a8ba"))
+				order_list.add_child(_label("Choose a map and panel theme.", 13, "#a8bac8"))
 				var theme_button := _button("Switch to light theme" if ThemeService.mode == "dark" else "Switch to dark theme", _toggle_theme)
-				theme_button.custom_minimum_size.y = _ui_size(50)
+				theme_button.custom_minimum_size.y = _ui_size(ThemeService.control_height("standard"))
 				order_list.add_child(theme_button)
 			else:
-				order_list.add_child(_label("LEGACY · FICTIONAL MAP · PRESERVED" if legacy_map_mode else "GEOGRAPHIC · KL / SELANGOR", 12, "#f1f6fa"))
+				order_list.add_child(_label("CURRENT SAVE", 11, "#91a8ba"))
+				var profile_label := _label("Legacy map · preserved" if legacy_map_mode else "Geographic map · KL / Selangor", 14, "#f1f6fa")
+				profile_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				order_list.add_child(profile_label)
 				var continue_button := _button("Continue Game", _continue_game)
-				continue_button.custom_minimum_size.y = _ui_size(46)
+				continue_button.custom_minimum_size.y = _ui_size(ThemeService.control_height("standard"))
+				_set_button_variant(continue_button, "action")
 				order_list.add_child(continue_button)
 				var save_actions := HBoxContainer.new()
 				save_actions.add_theme_constant_override("separation", 6)
 				order_list.add_child(save_actions)
 				var load_button := _button("Load Game", _show_load_game)
 				load_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				load_button.custom_minimum_size.y = _ui_size(46)
+				load_button.custom_minimum_size.y = _ui_size(ThemeService.control_height("standard"))
 				save_actions.add_child(load_button)
 				var new_game_button := _button("New Game", _confirm_new_game)
 				new_game_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				new_game_button.custom_minimum_size.y = _ui_size(46)
+				new_game_button.custom_minimum_size.y = _ui_size(ThemeService.control_height("standard"))
 				save_actions.add_child(new_game_button)
 	rider_summary = null
 	finance_summary = null
@@ -1637,21 +1737,35 @@ func _refresh() -> void:
 func _metric_card(title: String, value: String) -> Control:
 	var card := PanelContainer.new()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card.custom_minimum_size = Vector2(0, 46)
+	card.custom_minimum_size = Vector2(0, 58)
 	var card_style := _panel_style("#152e3e", 13)
-	card_style.content_margin_left = 8
-	card_style.content_margin_right = 8
+	card_style.content_margin_left = ThemeService.space("sm")
+	card_style.content_margin_right = ThemeService.space("sm")
 	card_style.content_margin_top = 3
 	card_style.content_margin_bottom = 3
 	card.add_theme_stylebox_override("panel", card_style)
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 2)
 	card.add_child(stack)
-	stack.add_child(_label(title, 10, "#9db1c1"))
+	var heading := _label(title, 10, "#9db1c1")
+	heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	stack.add_child(heading)
 	var amount := _label(value, 18, "#f1f6fa")
-	amount.add_theme_font_size_override("font_size", int(round(18.0 * ui_scale)))
+	var amount_size := 18 if value.length() <= 10 else 15 if value.length() <= 14 else 13
+	amount.add_theme_font_size_override("font_size", int(round(float(amount_size) * ui_scale)))
 	stack.add_child(amount)
 	return card
+
+func _format_rm(value: float) -> String:
+	var fixed := "%.2f" % value
+	var parts := fixed.split(".")
+	var integer_part := str(parts[0])
+	var grouped := ""
+	for index in integer_part.length():
+		if index > 0 and (integer_part.length() - index) % 3 == 0:
+			grouped += ","
+		grouped += integer_part.substr(index, 1)
+	return "RM%s.%s" % [grouped, str(parts[1])]
 
 func _toggle_theme() -> void:
 	ThemeService.toggle()
