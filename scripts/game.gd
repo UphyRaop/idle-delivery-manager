@@ -1322,6 +1322,11 @@ func _load_game() -> void:
 			rider["status"] = "ready"
 			rider["order_id"] = -1
 			rider.erase("route_state")
+	for order in orders:
+		if str(order.get("status", "")).begins_with("On route"):
+			selected_order = int(order.get("id", -1))
+			sheet_expanded = true
+			break
 
 func _as_vector2(value: Variant, fallback: Vector2) -> Vector2:
 	if value is Vector2:
