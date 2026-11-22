@@ -33,6 +33,7 @@ func _test_service_quotes() -> void:
 		prices.append(float(quote.get("total_rm", 0.0)))
 	_check(labels.size() == 4 and labels[0] != labels[1] and labels[1] != labels[2] and labels[2] != labels[3], "each service has a distinct customer-facing name")
 	_check(markers.size() == 4 and markers[0] != markers[1] and markers[1] != markers[2] and markers[2] != markers[3], "each service has a distinct map marker")
+	_check(IDMServicePricing.marker("e_hailing") != "R", "passenger request marker is distinct from rider markers")
 	_check(prices[0] != prices[1] and prices[1] != prices[2] and prices[2] != prices[3], "service categories produce different automatic fares")
 	var short_route := IDMServicePricing.quote("parcel_logistics", 1.0, 300.0)
 	var long_route := IDMServicePricing.quote("parcel_logistics", 10.0, 1200.0)

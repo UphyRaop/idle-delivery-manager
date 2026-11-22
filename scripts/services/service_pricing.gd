@@ -6,7 +6,7 @@ class_name IDMServicePricing
 const RATES := {
 	"food_delivery": {"label": "Food delivery", "marker": "F", "base_rm": 4.50, "per_km_rm": 1.35, "per_minute_rm": 0.12, "minimum_rm": 5.00, "maximum_rm": 65.00},
 	"parcel_logistics": {"label": "Parcel logistics", "marker": "P", "base_rm": 5.00, "per_km_rm": 1.05, "per_minute_rm": 0.10, "minimum_rm": 5.00, "maximum_rm": 85.00},
-	"e_hailing": {"label": "Passenger e-hailing", "marker": "R", "base_rm": 3.50, "per_km_rm": 1.55, "per_minute_rm": 0.16, "minimum_rm": 5.00, "maximum_rm": 100.00},
+	"e_hailing": {"label": "Passenger e-hailing", "marker": "H", "base_rm": 3.50, "per_km_rm": 1.55, "per_minute_rm": 0.16, "minimum_rm": 5.00, "maximum_rm": 100.00},
 	"express_logistics": {"label": "Same-day express", "marker": "X", "base_rm": 8.00, "per_km_rm": 1.45, "per_minute_rm": 0.13, "minimum_rm": 8.00, "maximum_rm": 120.00},
 }
 

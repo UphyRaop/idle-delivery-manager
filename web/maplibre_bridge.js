@@ -11,9 +11,9 @@
  *   {type, pointerId, pointerType, clientX, clientY, button, buttons, deltaY}.
  *   A native PointerEvent can also be passed directly. Coordinates are CSS
  *   pixels relative to the browser viewport.
- * - The OSMF Shortbread style URLs are public services, not an SLA or a promise
- *   of unlimited traffic. Review OSMF vector-tile terms/capacity before scaling
- *   production traffic and retain visible OSM attribution.
+ * - OpenFreeMap public style/tiles are used without an API key. Retain its
+ *   required OpenMapTiles and OpenStreetMap attribution and review the public
+ *   instance terms and availability before scaling traffic.
  */
 (function (window, document) {
   "use strict";
@@ -28,10 +28,17 @@
   const MAX_ZOOM = 19;
   const MAP_ROOT_ID = "idm-map-root";
   const GODOT_CANVAS_ID = "canvas";
+  const GAME_ROUTES_SOURCE = "idm-game-routes";
+  const GAME_MARKERS_SOURCE = "idm-game-markers";
+  const GAME_ROUTE_CASING_LAYER = "idm-game-route-casing";
+  const GAME_ROUTE_LAYER = "idm-game-routes-line";
+  const GAME_MARKER_LAYER = "idm-game-markers-circle";
+  const GAME_MARKER_LABEL_LAYER = "idm-game-markers-label";
 
   let map = null;
   let mapRoot = null;
   let ready = false;
+  let styleReady = false;
   let themeMode = "dark";
   let appliedTheme = "dark";
   let roadsRestyled = false;
@@ -46,6 +53,12 @@
   let lastTouchTap = null;
   let touchDoubleTapPending = false;
   let canvasEventsBound = false;
+  let gameplayRoutes = emptyFeatureCollection();
+  let gameplayMarkers = emptyFeatureCollection();
+  let gameplayRiders = new Map();
+  const renderedRiderMarkers = new Map();
+  let gameplayRouteSignature = "";
+  let gameplayMarkerSignature = "";
 
   function ensureRoot() {
     let root = document.getElementById(MAP_ROOT_ID);
@@ -129,7 +142,13 @@
       map.on("style.load", function () {
         roadsRestyled = false;
         if (map) {
+          // Style layers can be installed at style.load, even while vector
+          // tile requests are still outstanding. isStyleLoaded() stays false
+          // during that period and must not suppress gameplay overlays.
+          styleReady = true;
           ready = true;
+          ensureGameplayOverlays();
+          syncDynamicRiderMarkers();
           emit("idm-map-style-ready", { theme: themeMode });
           window.setTimeout(applyRoadHierarchy, 700);
         }
@@ -240,6 +259,365 @@
     return Number.isFinite(lon) && Number.isFinite(lat) && lon >= -180 && lon <= 180 && lat >= -85.051129 && lat <= 85.051129;
   }
 
+  function emptyFeatureCollection() {
+    return { type: "FeatureCollection", features: [] };
+  }
+
+  function cleanCoordinates(value, minimumCount) {
+    if (!Array.isArray(value) || value.length < minimumCount) return null;
+    const coordinates = [];
+    for (const pair of value) {
+      if (!Array.isArray(pair) || pair.length < 2) return null;
+      const longitude = Number(pair[0]);
+      const latitude = Number(pair[1]);
+      if (!validCoordinate(longitude, latitude)) return null;
+      coordinates.push([longitude, latitude]);
+    }
+    return coordinates;
+  }
+
+  function routeFeatureCollection(routes) {
+    const features = [];
+    const ids = new Set();
+    (Array.isArray(routes) ? routes : []).forEach(function (route) {
+      if (!route || typeof route !== "object") return;
+      const id = String(route.id === undefined ? "" : route.id).trim();
+      const phase = route.phase === "pickup" ? "pickup" : route.phase === "delivery" ? "delivery" : "";
+      const coordinates = cleanCoordinates(route.coordinates, 2);
+      if (!id || ids.has(id) || !phase || !coordinates) return;
+      ids.add(id);
+      features.push({
+        type: "Feature",
+        id: "route:" + id,
+        properties: { route_id: id, phase: phase, selected: Boolean(route.selected) },
+        geometry: { type: "LineString", coordinates: coordinates },
+      });
+    });
+    return { type: "FeatureCollection", features: features };
+  }
+
+  function markerFeatureCollection(markers) {
+    const features = [];
+    const ids = new Set();
+    (Array.isArray(markers) ? markers : []).forEach(function (marker) {
+      if (!marker || typeof marker !== "object") return;
+      const id = String(marker.id === undefined ? "" : marker.id).trim();
+      const kind = String(marker.kind === undefined ? "" : marker.kind).trim();
+      if (isRiderKind(kind)) return;
+      const status = String(marker.status === undefined ? "" : marker.status).trim();
+      const service = String(marker.service === undefined ? "" : marker.service).trim();
+      const coordinates = cleanCoordinates([marker.coordinates], 1);
+      if (!id || ids.has(id) || !kind || !coordinates) return;
+      ids.add(id);
+      features.push({
+        type: "Feature",
+        id: "marker:" + id,
+        properties: {
+          marker_id: id,
+          booking_id: String(marker.bookingId === undefined ? "" : marker.bookingId),
+          kind: kind,
+          status: status,
+          service: service,
+          label: String(marker.label === undefined ? "" : marker.label).slice(0, 4),
+          selected: Boolean(marker.selected),
+        },
+        geometry: { type: "Point", coordinates: coordinates[0] },
+      });
+    });
+    return { type: "FeatureCollection", features: features };
+  }
+
+  function isRiderKind(kind) {
+    return kind === "rider" || kind === "rider_available" || kind === "rider_active";
+  }
+
+  function riderMarkerMap(markers) {
+    const result = new Map();
+    (Array.isArray(markers) ? markers : []).forEach(function (marker) {
+      if (!marker || typeof marker !== "object") return;
+      const id = String(marker.id === undefined ? "" : marker.id).trim();
+      const kind = String(marker.kind === undefined ? "" : marker.kind).trim();
+      const coordinates = cleanCoordinates([marker.coordinates], 1);
+      if (!id || !isRiderKind(kind) || !coordinates || result.has(id)) return;
+      result.set(id, {
+        coordinates: coordinates[0],
+        kind: kind,
+        status: String(marker.status === undefined ? "ready" : marker.status),
+        label: String(marker.label === undefined ? "R" : marker.label).slice(0, 4),
+        selected: Boolean(marker.selected),
+      });
+    });
+    return result;
+  }
+
+  function riderMarkerColor(rider) {
+    if (rider.selected) return "#ffcf63";
+    if (rider.kind === "rider_active" || rider.status === "busy") return "#9c8cff";
+    return "#39d5e8";
+  }
+
+  function syncDynamicRiderMarkers() {
+    if (!map || !window.maplibregl || typeof window.maplibregl.Marker !== "function") return false;
+    const wanted = new Set();
+    gameplayRiders.forEach(function (rider, id) {
+      wanted.add(id);
+      let rendered = renderedRiderMarkers.get(id);
+      if (!rendered) {
+        const element = document.createElement("div");
+        element.className = "idm-map-rider-marker";
+        element.setAttribute("role", "img");
+        element.style.width = "38px";
+        element.style.height = "38px";
+        element.style.boxSizing = "border-box";
+        element.style.display = "grid";
+        element.style.placeItems = "center";
+        element.style.borderRadius = "50%";
+        element.style.border = "2px solid #0a1a25";
+        element.style.color = "#07151f";
+        element.style.font = "700 15px/1 system-ui, sans-serif";
+        element.style.pointerEvents = "none";
+        element.style.userSelect = "none";
+        element.style.willChange = "transform";
+        const marker = new window.maplibregl.Marker({ element: element, anchor: "center" }).setLngLat(rider.coordinates).addTo(map);
+        rendered = { marker: marker, element: element, coordinates: null };
+        renderedRiderMarkers.set(id, rendered);
+      }
+      rendered.element.style.backgroundColor = riderMarkerColor(rider);
+      rendered.element.style.width = rider.selected ? "42px" : "38px";
+      rendered.element.style.height = rider.selected ? "42px" : "38px";
+      rendered.element.textContent = rider.label || "R";
+      rendered.element.setAttribute("aria-label", (rider.status === "busy" ? "Active partner " : "Available partner ") + id);
+      if (!rendered.coordinates || rendered.coordinates[0] !== rider.coordinates[0] || rendered.coordinates[1] !== rider.coordinates[1]) {
+        rendered.marker.setLngLat(rider.coordinates);
+        rendered.coordinates = rider.coordinates.slice();
+      }
+    });
+    renderedRiderMarkers.forEach(function (rendered, id) {
+      if (wanted.has(id)) return;
+      rendered.marker.remove();
+      renderedRiderMarkers.delete(id);
+    });
+    return true;
+  }
+
+  function firstSymbolLayerId() {
+    const layers = map && map.getStyle() ? map.getStyle().layers : [];
+    const firstSymbol = Array.isArray(layers) ? layers.find(function (layer) { return layer.type === "symbol"; }) : null;
+    return firstSymbol ? firstSymbol.id : undefined;
+  }
+
+  function addLayerBeforeLabels(layer) {
+    if (map.getLayer(layer.id)) return;
+    const before = firstSymbolLayerId();
+    if (before) map.addLayer(layer, before);
+    else map.addLayer(layer);
+  }
+
+  function ensureGameplayOverlays() {
+    if (!map || !styleReady || !map.getStyle() || !Array.isArray(map.getStyle().layers)) return false;
+    try {
+      if (!map.getSource(GAME_ROUTES_SOURCE)) {
+        map.addSource(GAME_ROUTES_SOURCE, { type: "geojson", data: gameplayRoutes });
+      }
+      if (!map.getSource(GAME_MARKERS_SOURCE)) {
+        map.addSource(GAME_MARKERS_SOURCE, { type: "geojson", data: gameplayMarkers });
+      }
+      addLayerBeforeLabels({
+        id: GAME_ROUTE_CASING_LAYER,
+        type: "line",
+        source: GAME_ROUTES_SOURCE,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#07151f",
+          "line-opacity": 0.88,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, ["case", ["get", "selected"], 5.2, 4.2], 14, ["case", ["get", "selected"], 8, 6], 19, ["case", ["get", "selected"], 11, 8]],
+        },
+      });
+      addLayerBeforeLabels({
+        id: GAME_ROUTE_LAYER,
+        type: "line",
+        source: GAME_ROUTES_SOURCE,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": ["match", ["get", "phase"], "pickup", "#ffcf63", "delivery", "#39d5e8", "#39d5e8"],
+          "line-opacity": 0.97,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, ["case", ["get", "selected"], 3.2, 2.2], 14, ["case", ["get", "selected"], 5.2, 3.6], 19, ["case", ["get", "selected"], 7.2, 5]],
+        },
+      });
+      addLayerBeforeLabels({
+        id: GAME_MARKER_LAYER,
+        type: "circle",
+        source: GAME_MARKERS_SOURCE,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, ["case", ["get", "selected"], 8.5, 7], 13, ["case", ["get", "selected"], 12.5, 10], 18, ["case", ["get", "selected"], 16, 13]],
+          "circle-color": ["case",
+            ["==", ["get", "kind"], "rider"], ["case", ["==", ["get", "status"], "busy"], "#9c8cff", "#39d5e8"],
+            ["==", ["get", "kind"], "booking"], ["match", ["get", "service"],
+              "food_delivery", "#ffb45e", "parcel_logistics", "#39d5e8",
+              "passenger_transport", "#76dca8", "same_day", "#ffcf63", "#39d5e8"],
+            ["match", ["get", "kind"],
+            "rider_available", "#39d5e8", "rider_active", "#9c8cff",
+            "booking_food", "#ffb45e", "booking_parcel", "#39d5e8",
+            "booking_passenger", "#76dca8", "booking_express", "#ffcf63",
+            "pickup", "#ffcf63", "destination", "#ff7185", "hub", "#82aaff", "#39d5e8"]],
+          "circle-stroke-color": ["case", ["get", "selected"], "#ffffff", "#0a1a25"],
+          "circle-stroke-width": ["case", ["get", "selected"], 3, 2],
+          "circle-opacity": 0.98,
+        },
+      });
+      addLayerBeforeLabels({
+        id: GAME_MARKER_LABEL_LAYER,
+        type: "symbol",
+        source: GAME_MARKERS_SOURCE,
+        layout: {
+          "text-field": ["get", "label"],
+          "text-font": ["Noto Sans Bold"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 8, 10, 14, 12, 19, 14],
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+          "text-anchor": "center",
+          "text-offset": [0, 0],
+        },
+        paint: { "text-color": "#07151f", "text-halo-color": "#ffffff", "text-halo-width": 0.2 },
+      });
+      setSourceDataIfChanged(GAME_ROUTES_SOURCE, gameplayRoutes, "routes");
+      setSourceDataIfChanged(GAME_MARKERS_SOURCE, gameplayMarkers, "markers");
+      return true;
+    } catch (error) {
+      emit("idm-map-error", { message: "Could not install gameplay overlays: " + String(error && error.message ? error.message : error) });
+      return false;
+    }
+  }
+
+  function setSourceDataIfChanged(sourceId, collection, kind) {
+    const signature = JSON.stringify(collection);
+    if (kind === "routes") {
+      if (signature === gameplayRouteSignature) return;
+      gameplayRouteSignature = signature;
+    } else {
+      if (signature === gameplayMarkerSignature) return;
+      gameplayMarkerSignature = signature;
+    }
+    const source = map && map.getSource(sourceId);
+    if (source && typeof source.setData === "function") source.setData(collection);
+  }
+
+  // Replace the complete gameplay overlay state. Coordinates are WGS84 arrays
+  // in [longitude, latitude] order. Omitted IDs are removed on this update.
+  function setGameplayOverlays(payload) {
+    const value = payload && typeof payload === "object" ? payload : {};
+    const nextRoutes = routeFeatureCollection(value.routes);
+    const nextMarkers = markerFeatureCollection(value.markers);
+    const nextRiders = riderMarkerMap(value.markers);
+    const nextRouteSignature = JSON.stringify(nextRoutes);
+    const nextMarkerSignature = JSON.stringify(nextMarkers);
+    const routesChanged = nextRouteSignature !== gameplayRouteSignature;
+    const markersChanged = nextMarkerSignature !== gameplayMarkerSignature;
+    gameplayRoutes = nextRoutes;
+    gameplayMarkers = nextMarkers;
+    gameplayRiders = nextRiders;
+    if (map && styleReady) {
+      if (!ensureGameplayOverlays()) return false;
+      if (routesChanged) setSourceDataIfChanged(GAME_ROUTES_SOURCE, gameplayRoutes, "routes");
+      if (markersChanged) setSourceDataIfChanged(GAME_MARKERS_SOURCE, gameplayMarkers, "markers");
+    }
+    if (map) syncDynamicRiderMarkers();
+    return true;
+  }
+
+  function clearGameplayOverlays() {
+    return setGameplayOverlays({ routes: [], markers: [] });
+  }
+
+  // High-frequency simulation updates contain only moving partner positions.
+  // Keep route GeoJSON out of the per-frame bridge payload so vehicle tracking
+  // stays responsive without repeatedly serializing road geometry.
+  function setRiderPositions(markers) {
+    gameplayRiders = riderMarkerMap(markers);
+    if (map) syncDynamicRiderMarkers();
+    return true;
+  }
+
+  // Hit-test the rendered geographic marker layer rather than the Godot HUD
+  // canvas. CSS viewport coordinates are passed through to MapLibre.
+  function pickBookingAt(x, y) {
+    const pointX = Number(x);
+    const pointY = Number(y);
+    if (!map || !styleReady || ![pointX, pointY].every(Number.isFinite) || !map.getLayer(GAME_MARKER_LAYER)) return null;
+    const features = map.queryRenderedFeatures([pointX, pointY], { layers: [GAME_MARKER_LAYER] });
+    for (const feature of features) {
+      const properties = feature.properties || {};
+      const kind = String(properties.kind || "");
+      if (kind !== "booking" && !kind.startsWith("booking_")) continue;
+      const coordinates = feature.geometry && Array.isArray(feature.geometry.coordinates) ? feature.geometry.coordinates : [];
+      return {
+        id: String(properties.marker_id || ""),
+        bookingId: String(properties.booking_id || ""),
+        kind: String(properties.kind || ""),
+        label: String(properties.label || ""),
+        coordinates: coordinates.slice(0, 2).map(Number),
+        selected: Boolean(properties.selected),
+      };
+    }
+    return null;
+  }
+
+  function projectCoordinate(coordinates) {
+    if (!map || !styleReady || !Array.isArray(coordinates) || coordinates.length < 2) return null;
+    const longitude = Number(coordinates[0]);
+    const latitude = Number(coordinates[1]);
+    if (!validCoordinate(longitude, latitude)) return null;
+    const point = map.project([longitude, latitude]);
+    return [point.x, point.y];
+  }
+
+  function gameplayOverlayState() {
+    return {
+      routeCount: gameplayRoutes.features.length,
+      markerCount: gameplayMarkers.features.length + gameplayRiders.size,
+      dynamicRiderCount: renderedRiderMarkers.size,
+      sourcesReady: Boolean(map && map.getSource(GAME_ROUTES_SOURCE) && map.getSource(GAME_MARKERS_SOURCE)),
+      layersReady: Boolean(map && map.getLayer(GAME_ROUTE_LAYER) && map.getLayer(GAME_MARKER_LAYER)),
+    };
+  }
+
+  function gameplayOverlaySnapshot() {
+    return {
+      routes: gameplayRoutes.features.map(function (feature) {
+        return { id: feature.id, properties: Object.assign({}, feature.properties), coordinates: feature.geometry.coordinates.map(function (point) { return point.slice(); }) };
+      }),
+      markers: gameplayMarkers.features.map(function (feature) {
+        return { id: feature.id, properties: Object.assign({}, feature.properties), coordinates: feature.geometry.coordinates.slice() };
+      }),
+      riders: Array.from(gameplayRiders.entries()).map(function (entry) {
+        return { id: entry[0], kind: entry[1].kind, status: entry[1].status, coordinates: entry[1].coordinates.slice() };
+      }),
+    };
+  }
+
+  function overlayRenderDiagnostics() {
+    if (!map) return { riders: [], routeLayerReady: false };
+    const riders = [];
+    renderedRiderMarkers.forEach(function (rendered, id) {
+      const rect = rendered.element.getBoundingClientRect();
+      const projected = map.project(rendered.marker.getLngLat());
+      riders.push({
+        id: id,
+        longitude: rendered.marker.getLngLat().lng,
+        latitude: rendered.marker.getLngLat().lat,
+        projected: [projected.x, projected.y],
+        rendered: [rect.left + rect.width / 2, rect.top + rect.height / 2],
+      });
+    });
+    return { riders: riders, routeLayerReady: Boolean(map.getLayer(GAME_ROUTE_LAYER)) };
+  }
+
+  function routeRenderedAt(coordinates) {
+    if (!map || !map.getLayer(GAME_ROUTE_LAYER) || !Array.isArray(coordinates) || coordinates.length < 2) return false;
+    const point = map.project([Number(coordinates[0]), Number(coordinates[1])]);
+    return map.queryRenderedFeatures(point, { layers: [GAME_ROUTE_LAYER] }).length > 0;
+  }
+
   function getCamera() {
     if (!map) return null;
     const center = map.getCenter();
@@ -281,6 +659,7 @@
     if (!map) return true;
     if (appliedTheme === mode) return true;
     // MapLibre preserves its current camera when replacing the style.
+    styleReady = false;
     map.setStyle(STYLE_URLS[mode], { diff: false });
     appliedTheme = mode;
     return true;
@@ -297,6 +676,7 @@
         if (!map || root.style.display === "none") return;
         map.resize();
         if (map.isStyleLoaded()) ready = true;
+        syncDynamicRiderMarkers();
       });
     }
     return true;
@@ -613,6 +993,17 @@
     restyleRoads: applyRoadHierarchy,
     setBlockRects: setBlockRects,
     fitRoute: fitRoute,
+    // GeoJSON overlay contract. Data is WGS84 [longitude, latitude]. Every
+    // call replaces the whole set; stable IDs enable explicit feature identity.
+    setGameplayOverlays: setGameplayOverlays,
+    setRiderPositions: setRiderPositions,
+    clearGameplayOverlays: clearGameplayOverlays,
+    pickBookingAt: pickBookingAt,
+    projectCoordinate: projectCoordinate,
+    getGameplayOverlayState: gameplayOverlayState,
+    getGameplayOverlaySnapshot: gameplayOverlaySnapshot,
+    getOverlayRenderDiagnostics: overlayRenderDiagnostics,
+    isRouteRenderedAt: routeRenderedAt,
     forwardPointerEvent: forwardPointerEvent,
     consumeTouchDoubleTap: function () { const pending = touchDoubleTapPending; touchDoubleTapPending = false; return pending; },
     setFollowTarget: setFollowTarget,
