@@ -357,6 +357,7 @@
         kind: kind,
         status: String(marker.status === undefined ? "ready" : marker.status),
         service: String(marker.service === undefined ? "" : marker.service).trim(),
+        accessibleLabel: String(marker.accessibleLabel || marker.label || "").slice(0, 80),
         iconId: window.IDMMapIcons ? window.IDMMapIcons.iconIdFor(kind, marker.service) : "rider_bicycle",
         selected: Boolean(marker.selected),
       });
@@ -374,8 +375,11 @@
         const element = document.createElement("div");
         element.className = "idm-map-rider-marker";
         element.setAttribute("role", "img");
-        element.style.width = "32px";
-        element.style.height = "32px";
+        // The outer marker button area remains 48×48 while the shared SVG
+        // draws a 36px solid category circle. This keeps touch targets
+        // consistent with the static GeoJSON symbols below.
+        element.style.width = "48px";
+        element.style.height = "48px";
         element.style.boxSizing = "border-box";
         element.style.display = "block";
         element.style.background = "transparent";
@@ -389,8 +393,6 @@
         renderedRiderMarkers.set(id, rendered);
       }
       const active = rider.status === "busy" || rider.kind === "rider_active";
-      rendered.element.style.width = rider.selected ? "36px" : "32px";
-      rendered.element.style.height = rider.selected ? "36px" : "32px";
       rendered.element.innerHTML = window.IDMMapIcons.svgFor(rider.iconId, { active: active, selected: rider.selected });
       rendered.element.setAttribute("aria-label", (active ? "Active partner " : "Available partner ") + id + (rider.service ? " · " + rider.service.replaceAll("_", " ") : ""));
       if (!rendered.coordinates || rendered.coordinates[0] !== rider.coordinates[0] || rendered.coordinates[1] !== rider.coordinates[1]) {
@@ -503,7 +505,9 @@
         source: GAME_MARKERS_SOURCE,
         layout: {
           "icon-image": ["get", "icon"],
-          "icon-size": ["interpolate", ["linear"], ["zoom"], 8, ["case", ["get", "selected"], 0.68, 0.58], 14, ["case", ["get", "selected"], 0.75, 0.65], 19, ["case", ["get", "selected"], 0.82, 0.72]],
+          // A 48px transparent SVG viewport is the hit box. The colored
+          // circle inside remains 36px at all zoom levels.
+          "icon-size": 1,
           "icon-anchor": "center",
           "icon-allow-overlap": true,
           "icon-ignore-placement": true,
@@ -575,26 +579,68 @@
 
   // Hit-test the rendered geographic marker layer rather than the Godot HUD
   // canvas. CSS viewport coordinates are passed through to MapLibre.
-  function pickBookingAt(x, y) {
-    const pointX = Number(x);
-    const pointY = Number(y);
-    if (!map || !styleReady || ![pointX, pointY].every(Number.isFinite) || !map.getLayer(GAME_MARKER_LAYER)) return null;
-    const features = map.queryRenderedFeatures([pointX, pointY], { layers: [GAME_MARKER_LAYER] });
-    for (const feature of features) {
-      const properties = feature.properties || {};
+  // MapLibre returns overlapping features topmost-first; retain that ordering
+  // so one tap resolves predictably while still skipping pickup/decorative
+  // features that do not represent a selectable booking.
+  function bookingHitFromFeatures(features) {
+    for (const feature of Array.isArray(features) ? features : []) {
+      const properties = feature && feature.properties || {};
       const kind = String(properties.kind || "");
-      if (kind !== "booking" && !kind.startsWith("booking_")) continue;
+      const bookingId = String(properties.booking_id || "");
+      const selectableBooking = kind === "booking" || kind.startsWith("booking_") || bookingId !== "";
+      if (!selectableBooking) continue;
       const coordinates = feature.geometry && Array.isArray(feature.geometry.coordinates) ? feature.geometry.coordinates : [];
       return {
         id: String(properties.marker_id || ""),
-        bookingId: String(properties.booking_id || ""),
-        kind: String(properties.kind || ""),
+        bookingId: bookingId,
+        kind: kind,
         label: String(properties.label || ""),
         coordinates: coordinates.slice(0, 2).map(Number),
         selected: Boolean(properties.selected),
       };
     }
     return null;
+  }
+
+  function riderHitFromEntries(x, y, entries) {
+    const pointX = Number(x);
+    const pointY = Number(y);
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      const rect = entry && entry.rect;
+      if (!rect || pointX < rect.left || pointX >= rect.right || pointY < rect.top || pointY >= rect.bottom) continue;
+      const rider = entry.rider || {};
+      const rawRiderId = String(entry.id || "").replace(/^rider-/, "");
+      return {
+        kind: "rider",
+        riderId: rawRiderId,
+        label: rider.accessibleLabel || (rider.status === "busy" ? "Active partner" : "Available partner"),
+        coordinates: Array.isArray(rider.coordinates) ? rider.coordinates.slice(0, 2) : [],
+        status: rider.status || "ready",
+        service: rider.service || "",
+        selected: Boolean(rider.selected),
+      };
+    }
+    return null;
+  }
+
+  function pickRiderAt(x, y) {
+    const entries = [];
+    Array.from(renderedRiderMarkers.entries()).reverse().forEach(function (entry) {
+      const rendered = entry[1];
+      const rect = rendered.element.getBoundingClientRect();
+      entries.push({ id: entry[0], rider: gameplayRiders.get(entry[0]), rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom } });
+    });
+    return riderHitFromEntries(x, y, entries);
+  }
+
+  function pickBookingAt(x, y) {
+    const pointX = Number(x);
+    const pointY = Number(y);
+    if (!map || !styleReady || ![pointX, pointY].every(Number.isFinite) || !map.getLayer(GAME_MARKER_LAYER)) return null;
+    const riderHit = pickRiderAt(pointX, pointY);
+    if (riderHit) return riderHit;
+    const features = map.queryRenderedFeatures([pointX, pointY], { layers: [GAME_MARKER_LAYER] });
+    return bookingHitFromFeatures(features);
   }
 
   function projectCoordinate(coordinates) {
@@ -1038,6 +1084,8 @@
     setRiderPositions: setRiderPositions,
     clearGameplayOverlays: clearGameplayOverlays,
     pickBookingAt: pickBookingAt,
+    resolveBookingHit: bookingHitFromFeatures,
+    resolveRiderHit: riderHitFromEntries,
     projectCoordinate: projectCoordinate,
     getGameplayOverlayState: gameplayOverlayState,
     getGameplayOverlaySnapshot: gameplayOverlaySnapshot,

@@ -5,6 +5,8 @@ const vm = require("node:vm");
 const mapContext = { window: {} };
 vm.runInNewContext(fs.readFileSync("web/map_overlay_layers.js", "utf8"), mapContext);
 const icons = mapContext.window.IDMMapIcons;
+assert.equal(icons.markerVisibleDiameter, 36, "marker circles have the approved visible diameter");
+assert.equal(icons.markerHitTarget, 48, "marker symbol hit box is a touch-friendly 48 CSS pixels");
 const expected = {
   rider_bicycle: "#22C55E",
   driver_car: "#3B82F6",
@@ -38,6 +40,12 @@ for (const [service, iconId] of Object.entries({
 })) {
   assert.equal(icons.routeColorForService(service), expected[iconId], `route color follows ${service} vehicle/service`);
 }
+for (const [iconId, color] of Object.entries(expected)) {
+  const svg = icons.svgFor(iconId);
+  assert.match(svg, /width="48" height="48" viewBox="0 0 48 48"/, `${iconId} uses the shared 48px hit viewport`);
+  assert.match(svg, new RegExp(`<circle cx="24" cy="24" r="18" fill="${color}" stroke="#07151f" stroke-width="2"`), `${iconId} has the shared 36px solid circle and requested color`);
+  assert.match(svg, /transform="translate\(6 6\) scale\(\.75\)"/, `${iconId} keeps its white glyph inside the shared circle`);
+}
 assert.match(icons.svgFor("rider_bicycle"), /<circle/);
 assert.match(icons.svgFor("driver_car"), /<path/);
 assert.match(icons.svgFor("passenger"), /<circle/);
@@ -51,7 +59,8 @@ const bridgeContext = {
   document: { readyState: "loading", addEventListener() {} },
 };
 vm.runInNewContext(fs.readFileSync("web/map_overlay_layers.js", "utf8"), bridgeContext);
-vm.runInNewContext(fs.readFileSync("web/maplibre_bridge.js", "utf8"), bridgeContext);
+const bridgeSource = fs.readFileSync("web/maplibre_bridge.js", "utf8");
+vm.runInNewContext(bridgeSource, bridgeContext);
 const routeCoordinates = [[101.70, 3.10], [101.71, 3.11], [101.72, 3.12]];
 assert.equal(bridgeContext.window.IDMMap.setGameplayOverlays({
   routes: [
@@ -79,6 +88,27 @@ assert.equal(snapshot.markers.find((marker) => marker.id === "marker:pickup-7").
 assert.equal(snapshot.markers.find((marker) => marker.id === "marker:dropoff-7").properties.icon, "dropoff");
 assert.equal(snapshot.markers.find((marker) => marker.id === "marker:hub-1").properties.icon, "hub");
 assert.equal(snapshot.riders[0].kind, "driver_car");
+const pickedOverlap = bridgeContext.window.IDMMap.resolveBookingHit([
+  { properties: { kind: "pickup", marker_id: "pickup-7" }, geometry: { coordinates: [101.71, 3.11] } },
+  { properties: { kind: "booking_parcel", marker_id: "booking-top", booking_id: "21", selected: true }, geometry: { coordinates: [101.70, 3.10] } },
+  { properties: { kind: "booking_food", marker_id: "booking-bottom", booking_id: "22" }, geometry: { coordinates: [101.70, 3.10] } },
+]);
+assert.equal(pickedOverlap.id, "booking-top", "overlapping rendered markers resolve using MapLibre's topmost-first order");
+assert.equal(pickedOverlap.bookingId, "21");
+assert.equal(pickedOverlap.selected, true);
+assert.equal(bridgeContext.window.IDMMap.resolveBookingHit([{ properties: { kind: "pickup" } }]), null, "decorative pickup marker cannot mask a selectable booking hit");
+const activeDestinationHit = bridgeContext.window.IDMMap.resolveBookingHit([
+  { properties: { kind: "destination", marker_id: "booking-33-destination", booking_id: "33" }, geometry: { coordinates: [101.72, 3.12] } },
+]);
+assert.equal(activeDestinationHit.kind, "destination", "active delivery destination remains selectable");
+assert.equal(activeDestinationHit.bookingId, "33");
+assert.equal(bridgeContext.window.IDMMap.resolveBookingHit([{ properties: { kind: "pickup", marker_id: "booking-33-pickup", booking_id: "33" }, geometry: { coordinates: [101.71, 3.11] } }]).bookingId, "33", "selected booking pickup remains selectable");
+const riderHitEntry = { id: "rider-4", rider: { accessibleLabel: "Available partner 04", status: "ready", coordinates: [101.7, 3.1] }, rect: { left: 100, top: 100, right: 148, bottom: 148 } };
+assert.equal(bridgeContext.window.IDMMap.resolveRiderHit(100, 100, [riderHitEntry]).riderId, "4", "top-left of the 48px rider target selects it");
+assert.equal(bridgeContext.window.IDMMap.resolveRiderHit(147, 147, [riderHitEntry]).label, "Available partner 04", "bottom-right interior of the 48px rider target selects it");
+assert.equal(bridgeContext.window.IDMMap.resolveRiderHit(148, 148, [riderHitEntry]), null, "tap just outside the rider target does not select it");
+assert.match(bridgeSource, /"icon-size": 1,/, "48px GeoJSON symbol bounds remain the full touch target at every zoom");
+assert.match(bridgeSource, /element\.style\.width = "48px"/, "dynamic rider DOM markers use the same 48px hit viewport");
 assert.equal(bridgeContext.window.IDMMap.setGameplayOverlays({ routes: [], markers: [{ id: "stationary", kind: "merchant", coordinates: [101.7, 3.1] }] }), true);
 assert.equal(bridgeContext.window.IDMMap.getGameplayOverlaySnapshot().routes.length, 0, "stationary markers never invent route geometry");
-console.log("MAP ICON REGISTRY: 35 assertions passed");
+console.log("MAP ICON REGISTRY: 79 assertions passed");
