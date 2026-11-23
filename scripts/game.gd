@@ -614,10 +614,17 @@ func _build_ui() -> void:
 
 	sim_controls = PanelContainer.new()
 	sim_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	sim_controls.add_theme_stylebox_override("panel", _panel_style("#102433", 16))
+	var speed_panel_style := StyleBoxFlat.new()
+	speed_panel_style.bg_color = Color("#071722", 0.78)
+	speed_panel_style.set_corner_radius_all(14)
+	speed_panel_style.content_margin_left = 5
+	speed_panel_style.content_margin_right = 5
+	speed_panel_style.content_margin_top = 0
+	speed_panel_style.content_margin_bottom = 0
+	sim_controls.add_theme_stylebox_override("panel", speed_panel_style)
 	add_child(sim_controls)
 	var sim_row := HBoxContainer.new()
-	sim_row.add_theme_constant_override("separation", ThemeService.space("xxs"))
+	sim_row.add_theme_constant_override("separation", 2)
 	sim_controls.add_child(sim_row)
 	pause_button = _button("Pause", _toggle_pause)
 	pause_button.custom_minimum_size = Vector2(ThemeService.control_width("pause"), ThemeService.control_height("compact"))
@@ -862,7 +869,7 @@ func _layout_ui() -> void:
 	var css_to_ui_y := viewport_size.y / window_size.y if window_size.y > 0.0 else 1.0
 	safe_insets = Vector4(safe_insets_css.x * css_to_ui_x, safe_insets_css.y * css_to_ui_y, safe_insets_css.z * css_to_ui_x, safe_insets_css.w * css_to_ui_y)
 	for speed_button in speed_buttons.values():
-		speed_button.add_theme_font_size_override("font_size", int(round(14.0 * ui_scale)))
+		speed_button.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
 	for map_control in map_controls.get_children():
 		map_control.add_theme_font_size_override("font_size", int(round((13.0 if map_control.text in ["Center", "Fit", "Follow"] else 20.0) * ui_scale)))
 	if is_instance_valid(follow_rider_button):
@@ -880,11 +887,11 @@ func _layout_ui() -> void:
 	cash_label.add_theme_font_size_override("font_size", int(round(16.0 * ui_scale)))
 	available_label.add_theme_font_size_override("font_size", int(round(ThemeService.font_size("caption") * ui_scale)))
 	status_label.add_theme_font_size_override("font_size", int(round(13.0 * ui_scale)))
-	pause_button.add_theme_font_size_override("font_size", int(round(13.0 * ui_scale)))
+	pause_button.add_theme_font_size_override("font_size", int(round(11.0 * ui_scale)))
 	_update_sim_controls()
 	var sim_row := sim_controls.get_child(0) as HBoxContainer
 	if sim_row != null:
-		sim_row.add_theme_constant_override("separation", int(round(4.0 * ui_layout_scale)))
+		sim_row.add_theme_constant_override("separation", int(round(2.0 * ui_layout_scale)))
 	var nav_row := bottom_nav.get_child(0) as HBoxContainer
 	if nav_row != null:
 		nav_row.add_theme_constant_override("separation", int(round(5.0 * ui_layout_scale)))
@@ -916,12 +923,14 @@ func _layout_ui() -> void:
 	sim_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	sim_controls.offset_left = safe_left + 12 * ui_layout_scale
 	sim_controls.offset_top = safe_top + 64 * ui_layout_scale
-	var available_sim_width := maxf(252.0, viewport_size.x - safe_left - safe_right - 16.0 * ui_layout_scale)
-	sim_controls.offset_right = minf(safe_left + 330.0 * ui_layout_scale, safe_left + available_sim_width)
-	sim_controls.offset_bottom = safe_top + 122 * ui_layout_scale
-	pause_button.custom_minimum_size = Vector2(ThemeService.control_width("pause") * ui_layout_scale, maxf(44.0, ThemeService.control_height("compact") * ui_layout_scale))
+	var sim_available_width := maxf(0.0, viewport_size.x - safe_left - safe_right - 24.0 * ui_layout_scale)
+	var sim_width := minf(344.0 * ui_layout_scale, sim_available_width)
+	sim_controls.offset_right = sim_controls.offset_left + sim_width
+	sim_controls.offset_bottom = safe_top + 108 * ui_layout_scale
+	var segment_width := floorf(maxf(38.0 * ui_layout_scale, (sim_width - 20.0 * ui_layout_scale) / 6.0))
+	pause_button.custom_minimum_size = Vector2(segment_width, 44.0 * ui_layout_scale)
 	for speed_button in speed_buttons.values():
-		speed_button.custom_minimum_size = Vector2(maxf(44.0, ThemeService.control_width("speed") * ui_layout_scale), maxf(44.0, ThemeService.control_height("compact") * ui_layout_scale))
+		speed_button.custom_minimum_size = Vector2(segment_width, 44.0 * ui_layout_scale)
 
 	# The compact landscape sheet sits over the right side of the map. Keep
 	# zoom/recenter controls on the left in both compact and expanded states.
@@ -1619,11 +1628,13 @@ func _set_button_variant(button: Button, variant: String) -> void:
 	button.set_meta("ui_variant", variant)
 	var normal := StyleBoxFlat.new()
 	match variant:
+		"speed_selected": normal.bg_color = ThemeService.color("accent_fill")
+		"speed": normal.bg_color = Color("#153140", 0.58)
 		"selected": normal.bg_color = ThemeService.color("selected")
 		"action": normal.bg_color = ThemeService.color("accent_fill")
 		"quiet": normal.bg_color = ThemeService.color("panel")
 		_: normal.bg_color = ThemeService.color("button")
-	normal.set_corner_radius_all(ThemeService.corner_radius("control"))
+	normal.set_corner_radius_all(9 if variant in ["speed", "speed_selected"] else ThemeService.corner_radius("control"))
 	normal.content_margin_left = ThemeService.space("sm")
 	normal.content_margin_right = ThemeService.space("sm")
 	button.add_theme_stylebox_override("normal", normal)
@@ -1633,7 +1644,7 @@ func _set_button_variant(button: Button, variant: String) -> void:
 	var pressed := normal.duplicate() as StyleBoxFlat
 	pressed.bg_color = ThemeService.color("accent_fill")
 	button.add_theme_stylebox_override("pressed", pressed)
-	button.add_theme_color_override("font_color", Color("#04252d") if variant == "action" else ThemeService.color("button_text"))
+	button.add_theme_color_override("font_color", Color("#04252d") if variant in ["action", "speed_selected"] else ThemeService.color("button_text"))
 	for icon in nav_icons.values():
 		if is_instance_valid(icon):
 			icon.queue_redraw()
@@ -1924,7 +1935,6 @@ func _hire_rider() -> void:
 func _toggle_pause() -> void:
 	paused = not paused
 	simulation_clock.set_paused(paused)
-	pause_button.text = "Resume" if paused else "Pause"
 	status_label.text = "Simulation paused" if paused else "Operations resumed"
 	_update_sim_controls()
 	_save_game()
@@ -1941,10 +1951,12 @@ func _update_sim_controls() -> void:
 	if is_instance_valid(available_label):
 		available_label.text = "%d×  ·  %s" % [speed, "PAUSED" if paused else "LIVE"]
 	if is_instance_valid(pause_button):
-		pause_button.text = "Resume" if paused else "Pause"
+		pause_button.text = "Play" if paused else "Pause"
+		pause_button.tooltip_text = "Resume simulation" if paused else "Pause simulation"
+		_set_button_variant(pause_button, "speed")
 	for factor in speed_buttons:
 		var button: Button = speed_buttons[factor]
-		_set_button_variant(button, "selected" if int(factor) == speed else "default")
+		_set_button_variant(button, "speed_selected" if int(factor) == speed else "speed")
 		button.tooltip_text = "Current speed %d times" % int(factor) if int(factor) == speed else "Set simulation speed to %d times" % int(factor)
 
 func _find_order(order_id: int) -> Dictionary:
