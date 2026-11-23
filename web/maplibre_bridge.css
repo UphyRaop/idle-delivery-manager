@@ -24,13 +24,52 @@
   touch-action: none;
 }
 
-/* Preserve readable, visible OpenStreetMap attribution over both styles. */
-#idm-map-root .maplibregl-ctrl-attrib {
+/* Keep provider credits available without the old wide attribution block. */
+#idm-map-attribution,
+#idm-map-attribution.maplibregl-compact {
+  position: fixed;
+  z-index: 20;
+  top: calc(146px + env(safe-area-inset-top, 0px));
+  left: calc(10px + env(safe-area-inset-left, 0px));
   color: #e5edf2;
   background: rgb(8 22 31 / 78%);
-  border-radius: 5px 0 0 0;
-  font: 10px/1.4 system-ui, sans-serif;
+  border: 1px solid rgb(190 217 228 / 28%);
+  border-radius: 6px;
+  font: 10px/1.35 system-ui, sans-serif;
   pointer-events: auto;
+}
+
+/* Small map-corner affordance; MapLibre opens its linked credits on tap. */
+#idm-map-attribution.maplibregl-compact {
+  box-sizing: border-box;
+  width: 40px;
+  min-height: 40px;
+  height: 40px;
+  margin: 0;
+  padding: 2px;
+}
+
+#idm-map-attribution.maplibregl-compact-show {
+  width: auto;
+  height: auto;
+  max-width: min(258px, calc(100vw - 24px));
+  padding: 4px 28px 4px 8px;
+  white-space: normal;
+}
+
+#idm-map-attribution .maplibregl-ctrl-attrib-button {
+  width: 34px;
+  height: 34px;
+  border-radius: 4px;
+  background-color: transparent !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e5edf2' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 11v6m0-10h.01' stroke-linecap='round'/%3E%3C/svg%3E") !important;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 24px 24px;
+}
+
+#idm-map-attribution.maplibregl-compact-show .maplibregl-ctrl-attrib-button {
+  background-color: rgb(255 255 255 / 7%) !important;
 }
 
 /* Keep required attribution clear of the game HUD and map controls. */
@@ -39,13 +78,7 @@
   left: calc(10px + env(safe-area-inset-left, 0px));
 }
 
-#idm-map-root .maplibregl-ctrl-top-left .maplibregl-ctrl-attrib {
-  margin: 0;
-  max-width: 258px;
-  white-space: normal;
-}
-
-#idm-map-root .maplibregl-ctrl-attrib a {
+#idm-map-attribution a {
   color: #b7e8ef;
   text-decoration: underline;
 }
@@ -68,14 +101,14 @@
   pointer-events: none;
 }
 
-#idm-map-root .maplibregl-ctrl-attrib,
-#idm-map-root .maplibregl-ctrl-attrib a {
+#idm-map-attribution,
+#idm-map-attribution a {
   pointer-events: auto;
 }
 
 @media (orientation: landscape) {
-  #idm-map-root .maplibregl-ctrl-top-left {
+  #idm-map-attribution {
     top: calc(142px + env(safe-area-inset-top, 0px));
-    left: calc(160px + env(safe-area-inset-left, 0px));
+    left: calc(10px + env(safe-area-inset-left, 0px));
   }
 }
