@@ -51,6 +51,9 @@ jobs:
       - name: Verify floating map controls across viewports
         run: godot --headless --path . --script tests/map_controls_test.gd
 
+      - name: Verify floating bookings page and responsive placement
+        run: godot --headless --path . --script tests/bookings_button_test.gd
+
       - name: Run road routing and movement regression tests
         run: |
           node tests/map_overlay_layers_test.js

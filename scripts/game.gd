@@ -85,6 +85,14 @@ var map_control_icons: Dictionary = {}
 var map_legend_button: Button
 var map_legend_panel: PanelContainer
 var map_legend_open := false
+var bookings_button: Button
+var waiting_bookings_page: PanelContainer
+var waiting_bookings_page_margin: MarginContainer
+var waiting_bookings_page_list: VBoxContainer
+var waiting_bookings_page_open := false
+var sheet_handle_row: Control
+var sheet_header_row: Control
+var sheet_subtabs: HBoxContainer
 var fit_route_button: Button
 var follow_rider_button: Button
 var bottom_nav: PanelContainer
@@ -348,6 +356,9 @@ func _show_main_menu() -> void:
 	map_controls.visible = false
 	sheet.visible = false
 	bottom_nav.visible = false
+	bookings_button.visible = false
+	waiting_bookings_page_open = false
+	waiting_bookings_page.visible = false
 	_set_map_dom_visible(false)
 	_render_main_menu()
 
@@ -664,28 +675,28 @@ func _build_ui() -> void:
 	sheet_content.add_theme_constant_override("separation", 6)
 	sheet.add_child(sheet_content)
 
-	var handle_row := CenterContainer.new()
-	handle_row.custom_minimum_size.y = 10
-	sheet_content.add_child(handle_row)
+	sheet_handle_row = CenterContainer.new()
+	sheet_handle_row.custom_minimum_size.y = 10
+	sheet_content.add_child(sheet_handle_row)
 	var sheet_grabber := ColorRect.new()
 	sheet_grabber.color = Color("#547184")
 	sheet_grabber.custom_minimum_size = Vector2(38, 4)
-	handle_row.add_child(sheet_grabber)
+	sheet_handle_row.add_child(sheet_grabber)
 
-	var sheet_header := HBoxContainer.new()
-	sheet_header.add_theme_constant_override("separation", 8)
-	sheet_content.add_child(sheet_header)
+	sheet_header_row = HBoxContainer.new()
+	sheet_header_row.add_theme_constant_override("separation", 8)
+	sheet_content.add_child(sheet_header_row)
 	sheet_header_label = _label("INCOMING BOOKINGS", 12, "#91a8ba")
 	sheet_header_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sheet_header.add_child(sheet_header_label)
+	sheet_header_row.add_child(sheet_header_label)
 	sheet_toggle_button = _button("Expand", _toggle_sheet)
 	sheet_toggle_button.custom_minimum_size = Vector2(76, 44)
-	sheet_header.add_child(sheet_toggle_button)
-	var subtabs := HBoxContainer.new()
-	subtabs.add_theme_constant_override("separation", 5)
-	subtabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	subtabs.name = "Subtabs"
-	sheet_content.add_child(subtabs)
+	sheet_header_row.add_child(sheet_toggle_button)
+	sheet_subtabs = HBoxContainer.new()
+	sheet_subtabs.add_theme_constant_override("separation", 5)
+	sheet_subtabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sheet_subtabs.name = "Subtabs"
+	sheet_content.add_child(sheet_subtabs)
 	sheet_body = ScrollContainer.new()
 	sheet_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	sheet_body.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -740,6 +751,118 @@ func _build_ui() -> void:
 		nav_labels[internal_tab] = nav_label
 		nav_icons[internal_tab] = icon
 		nav_row.add_child(button)
+
+	bookings_button = _button("Bookings (0)", _open_waiting_bookings_page)
+	bookings_button.name = "WaitingBookingsButton"
+	bookings_button.accessibility_name = "Open waiting bookings"
+	bookings_button.tooltip_text = "Open the waiting bookings list"
+	bookings_button.custom_minimum_size = Vector2(148, 48)
+	_set_button_variant(bookings_button, "action")
+	add_child(bookings_button)
+	_build_waiting_bookings_page()
+
+func _build_waiting_bookings_page() -> void:
+	waiting_bookings_page = PanelContainer.new()
+	waiting_bookings_page.name = "WaitingBookingsPage"
+	waiting_bookings_page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var page_style := StyleBoxFlat.new()
+	page_style.bg_color = Color("#07151f")
+	page_style.set_corner_radius_all(0)
+	page_style.content_margin_left = 0
+	page_style.content_margin_right = 0
+	page_style.content_margin_top = 0
+	page_style.content_margin_bottom = 0
+	waiting_bookings_page.add_theme_stylebox_override("panel", page_style)
+	waiting_bookings_page.mouse_filter = Control.MOUSE_FILTER_STOP
+	waiting_bookings_page.visible = false
+	add_child(waiting_bookings_page)
+	waiting_bookings_page_margin = MarginContainer.new()
+	waiting_bookings_page.add_child(waiting_bookings_page_margin)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	waiting_bookings_page_margin.add_child(column)
+	var header := HBoxContainer.new()
+	column.add_child(header)
+	var title := _label("WAITING BOOKINGS", 18, "#45d9ec")
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	var back_button := _button("Back to Map", _close_waiting_bookings_page)
+	back_button.name = "WaitingBookingsBackButton"
+	back_button.custom_minimum_size = Vector2(132, 48)
+	back_button.accessibility_name = "Back to Map"
+	header.add_child(back_button)
+	var summary := _label("Review a booking, then return to its map marker.", 12, "#a8bac8")
+	column.add_child(summary)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	column.add_child(scroll)
+	waiting_bookings_page_list = VBoxContainer.new()
+	waiting_bookings_page_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	waiting_bookings_page_list.add_theme_constant_override("separation", 8)
+	scroll.add_child(waiting_bookings_page_list)
+
+func _refresh_waiting_bookings_page() -> void:
+	if not is_instance_valid(waiting_bookings_page_list):
+		return
+	for child in waiting_bookings_page_list.get_children():
+		waiting_bookings_page_list.remove_child(child)
+		child.queue_free()
+	var waiting_orders: Array[Dictionary] = []
+	for order in orders:
+		if str(order.get("status", "")) == "Waiting":
+			waiting_orders.append(order)
+	if waiting_orders.is_empty():
+		waiting_bookings_page_list.add_child(_label("No waiting bookings right now.", 14, "#a8bac8"))
+		return
+	for order in waiting_orders:
+		var order_id := int(order.get("id", -1))
+		var card := PanelContainer.new()
+		card.add_theme_stylebox_override("panel", _panel_style("#102433", 12))
+		waiting_bookings_page_list.add_child(card)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		card.add_child(row)
+		var details := VBoxContainer.new()
+		details.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(details)
+		var service := IDMServicePricing.short_label(str(order.get("service_type", "parcel_logistics")))
+		details.add_child(_label("BOOKING %03d  ·  %s" % [order_id, service], 13, "#f1f6fa"))
+		var eta := int(ceil(float(order.get("route_eta_seconds", 0.0)) / 60.0))
+		details.add_child(_label("Waiting  ·  %s  ·  ~%d min" % [_format_rm(float(order.get("payout", 0.0))), eta], 11, "#a8bac8"))
+		var review := _button("Review", func(): _review_booking_on_map(order_id))
+		review.name = "ReviewBooking%d" % order_id
+		review.custom_minimum_size = Vector2(92, 48)
+		review.accessibility_name = "Review booking %03d on map" % order_id
+		row.add_child(review)
+
+func _open_waiting_bookings_page() -> void:
+	if not is_instance_valid(waiting_bookings_page):
+		return
+	waiting_bookings_page_open = true
+	_refresh_waiting_bookings_page()
+	waiting_bookings_page.visible = true
+	_layout_ui()
+	waiting_bookings_page.move_to_front()
+
+func _close_waiting_bookings_page() -> void:
+	waiting_bookings_page_open = false
+	waiting_bookings_page.visible = false
+	sheet_expanded = false
+	status_label.text = ""
+	_refresh()
+	_layout_ui()
+
+func _review_booking_on_map(order_id: int) -> void:
+	waiting_bookings_page_open = false
+	waiting_bookings_page.visible = false
+	selected_tab = "Map"
+	selected_order = order_id
+	selected_rider_id = -1
+	sheet_expanded = true
+	status_label.text = ""
+	_refresh()
+	_layout_ui()
 
 func _panel_style(color: String, radius: int) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -982,6 +1105,7 @@ func _layout_ui() -> void:
 		nav_row.add_theme_constant_override("separation", int(round(5.0 * ui_layout_scale)))
 	var selected := _find_order(selected_order)
 	var order_detail_open: bool = selected_tab == "Map" and not selected.is_empty() and (selected["status"] == "Waiting" or str(selected["status"]).begins_with("On route"))
+	var map_collapsed := selected_tab == "Map" and not sheet_expanded
 	var nav_height: int = 68 if not is_landscape else 60
 	var sheet_height: int = 260 if sheet_expanded else 104
 	if is_landscape:
@@ -995,6 +1119,8 @@ func _layout_ui() -> void:
 			sheet_height = 206 if not is_landscape else 184
 		elif str(selected.get("status", "")).begins_with("On route"):
 			sheet_height = 204 if not is_landscape else 176
+	if map_collapsed:
+		sheet_height = 62
 	var safe_left := safe_insets.x
 	var safe_top := safe_insets.y
 	var safe_right := safe_insets.z
@@ -1045,39 +1171,62 @@ func _layout_ui() -> void:
 	for nav_button in nav_buttons.values():
 		nav_button.custom_minimum_size.y = maxf(float(ThemeService.control_height("compact")), 50.0 * ui_layout_scale)
 
-	if is_desktop or is_landscape:
+	bookings_button.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
+	bookings_button.offset_left = (safe_left + 12.0) * ui_layout_scale
+	bookings_button.offset_right = (safe_left + 160.0) * ui_layout_scale
+	bookings_button.offset_top = -(safe_bottom + (nav_height + 8 + 48) * ui_layout_scale)
+	bookings_button.offset_bottom = -(safe_bottom + (nav_height + 8) * ui_layout_scale)
+	bookings_button.custom_minimum_size = Vector2(148, 48) * ui_layout_scale
+	bookings_button.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
+	bookings_button.visible = game_session_started and selected_tab == "Map" and not main_menu_active and not waiting_bookings_page_open and not sheet_expanded
+	if map_collapsed:
+		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+		sheet.offset_left = -(safe_right + 176.0 * ui_layout_scale)
+		sheet.offset_right = -(safe_right + 12.0 * ui_layout_scale)
+		sheet.offset_top = -(safe_bottom + (nav_height + 8 + sheet_height) * ui_layout_scale)
+		sheet.offset_bottom = -(safe_bottom + (nav_height + 8) * ui_layout_scale)
+		var compact_style := _panel_style("#102433", 16)
+		compact_style.content_margin_left = 6.0 * ui_layout_scale
+		compact_style.content_margin_right = 6.0 * ui_layout_scale
+		compact_style.content_margin_top = 4.0 * ui_layout_scale
+		compact_style.content_margin_bottom = 4.0 * ui_layout_scale
+		sheet.add_theme_stylebox_override("panel", compact_style)
+	elif is_desktop or is_landscape:
 		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
 		sheet.offset_left = -352 * ui_layout_scale
 		sheet.offset_right = -safe_right - 12 * ui_layout_scale
 		sheet.offset_top = -safe_bottom - (nav_height + 8 + sheet_height) * ui_layout_scale
 		sheet.offset_bottom = -safe_bottom - (nav_height + 8) * ui_layout_scale
+		sheet.add_theme_stylebox_override("panel", _panel_style("#102433", 22))
 	else:
 		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 		sheet.offset_left = safe_left + 10 * ui_layout_scale
 		sheet.offset_right = -safe_right - 10 * ui_layout_scale
 		sheet.offset_top = -safe_bottom - (nav_height + 8 + sheet_height) * ui_layout_scale
 		sheet.offset_bottom = -safe_bottom - (nav_height + 8) * ui_layout_scale
+		sheet.add_theme_stylebox_override("panel", _panel_style("#102433", 22))
+	sheet_handle_row.visible = not map_collapsed
+	sheet_header_row.visible = not map_collapsed
+	sheet_content.add_theme_constant_override("separation", 0 if map_collapsed else (3 if is_landscape and sheet_expanded else 6))
 
 	if is_instance_valid(sheet_toggle_button):
 		sheet_toggle_button.text = "Hide" if sheet_expanded else "Expand"
 		sheet_toggle_button.add_theme_font_size_override("font_size", int(round(15.0 * ui_scale)))
 	if is_instance_valid(sheet_header_label):
 		sheet_header_label.text = _sheet_title()
-	sheet_content.add_theme_constant_override("separation", 3 if is_landscape and sheet_expanded else 6)
-	if sheet_content.get_child_count() > 0:
-			sheet_content.get_child(0).custom_minimum_size.y = (8 if is_landscape and sheet_expanded else 10) * ui_layout_scale
+	if is_instance_valid(sheet_handle_row):
+		sheet_handle_row.custom_minimum_size.y = (8 if is_landscape and sheet_expanded else 10) * ui_layout_scale
 	if is_instance_valid(sheet_toggle_button):
 		sheet_toggle_button.custom_minimum_size = Vector2(76, 40 if is_landscape and sheet_expanded else 44) * ui_layout_scale
 	if is_instance_valid(order_list):
 		order_list.add_theme_constant_override("separation", 3 if sheet_expanded else 0)
-		var subtabs: HBoxContainer = sheet_content.find_child("Subtabs", true, false)
-		if is_instance_valid(subtabs):
+		if is_instance_valid(sheet_subtabs):
 			# Keep the dispatch action above the bottom navigation on short screens.
 			# City/World navigation remains available again when the order card closes.
-			subtabs.visible = sheet_expanded and not order_detail_open
-			for subtab in subtabs.get_children():
+			sheet_subtabs.visible = (sheet_expanded and not order_detail_open) or map_collapsed
+			for subtab in sheet_subtabs.get_children():
 				subtab.custom_minimum_size.y = (40 if is_landscape and sheet_expanded else 46) * ui_layout_scale
-		sheet_body.visible = sheet_expanded or selected_tab == "Map"
+		sheet_body.visible = not map_collapsed and (sheet_expanded or selected_tab == "Map")
 		order_list.visible = true
 		if not sheet_expanded and selected_tab == "Map":
 			for child in order_list.get_children():
@@ -1086,13 +1235,22 @@ func _layout_ui() -> void:
 				order_list.get_child(0).visible = true
 	if is_instance_valid(status_label):
 		var active_map_order: bool = selected_tab == "Map" and not selected.is_empty() and (selected["status"] == "Waiting" or str(selected["status"]).begins_with("On route"))
-		status_label.visible = status_label.text != "" and (sheet_expanded or selected_tab == "Map") and not active_map_order
+		status_label.visible = not map_collapsed and status_label.text != "" and (sheet_expanded or selected_tab == "Map") and not active_map_order
 	if is_instance_valid(company_setup_center) and is_instance_valid(company_setup_card):
 		company_setup_center.offset_left = (safe_left + 12.0) * ui_layout_scale
 		company_setup_center.offset_right = -(safe_right + 12.0) * ui_layout_scale
 		company_setup_center.offset_top = (safe_top + 12.0) * ui_layout_scale
 		company_setup_center.offset_bottom = -(safe_bottom + 12.0) * ui_layout_scale
 		company_setup_card.custom_minimum_size.x = maxf(0.0, minf(366.0, viewport_size.x - safe_left - safe_right - 24.0 * ui_layout_scale))
+	if is_instance_valid(waiting_bookings_page_margin):
+		waiting_bookings_page_margin.add_theme_constant_override("margin_left", int(round((safe_left + 16.0) * ui_layout_scale)))
+		waiting_bookings_page_margin.add_theme_constant_override("margin_right", int(round((safe_right + 16.0) * ui_layout_scale)))
+		waiting_bookings_page_margin.add_theme_constant_override("margin_top", int(round((safe_top + 16.0) * ui_layout_scale)))
+		waiting_bookings_page_margin.add_theme_constant_override("margin_bottom", int(round((safe_bottom + 16.0) * ui_layout_scale)))
+	if not main_menu_active:
+		bottom_nav.visible = game_session_started and not waiting_bookings_page_open
+		waiting_bookings_page.visible = waiting_bookings_page_open and game_session_started
+		sheet.visible = game_session_started and (selected_tab != "Map" or sheet_expanded or map_collapsed)
 	for tab in nav_buttons:
 		var nav_button: Button = nav_buttons[tab]
 		var selected_button: bool = tab == selected_tab
@@ -1102,11 +1260,13 @@ func _layout_ui() -> void:
 	# Keep the persistent navigation above a tall or expanded sheet. The sheet
 	# is deliberately allowed to grow for readable booking details, but must not
 	# make the four primary destinations visually or physically inaccessible.
-	if not main_menu_active and not is_instance_valid(save_overlay) and not is_instance_valid(new_game_confirmation) and not is_instance_valid(return_menu_confirmation):
+	if waiting_bookings_page_open and waiting_bookings_page.visible:
+		waiting_bookings_page.move_to_front()
+	elif not main_menu_active and not is_instance_valid(save_overlay) and not is_instance_valid(new_game_confirmation) and not is_instance_valid(return_menu_confirmation):
 		bottom_nav.move_to_front()
-	if map_legend_panel.visible:
-		map_legend_panel.move_to_front()
-		bottom_nav.move_to_front()
+		if map_legend_panel.visible:
+			map_legend_panel.move_to_front()
+			bottom_nav.move_to_front()
 	if viewport_changed:
 		call_deferred("_refresh")
 		if main_menu_active and not is_instance_valid(new_game_confirmation) and not is_instance_valid(save_overlay):
@@ -1462,7 +1622,7 @@ func _set_subtab(name: String) -> void:
 
 func _set_tab(name: String) -> void:
 	selected_tab = name
-	sheet_expanded = true
+	sheet_expanded = name != "Map"
 	if name == "Map":
 		selected_subtab = "World" if world_map else "City"
 	else:
@@ -2125,9 +2285,12 @@ func _refresh() -> void:
 	cash_label.text = _format_rm(cash)
 	active_jobs_label.text = "ACTIVE  %d" % _busy_count()
 	pending_jobs_label.text = "ORDERS  %d" % _waiting_count()
+	if is_instance_valid(bookings_button):
+		bookings_button.text = "Bookings (%d)" % _waiting_count()
+		bookings_button.accessibility_name = "Open waiting bookings, %d waiting" % _waiting_count()
 	_update_sim_controls()
 	if selected_tab == "Map" and status_label.text == "" and _find_order(selected_order).is_empty():
-		status_label.text = "Tap a booking pin to review and dispatch."
+		status_label.text = "Tap a booking pin or Bookings to review deliveries."
 	for child in order_list.get_children():
 		child.queue_free()
 	_sync_geographic_overlays()
@@ -2275,6 +2438,8 @@ func _refresh() -> void:
 				save_actions.add_child(new_game_button)
 	rider_summary = null
 	finance_summary = null
+	if waiting_bookings_page_open:
+		_refresh_waiting_bookings_page()
 	if is_instance_valid(sheet_header_label):
 		sheet_header_label.text = _sheet_title()
 	if is_instance_valid(map_view):
