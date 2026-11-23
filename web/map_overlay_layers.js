@@ -38,6 +38,9 @@
     express_logistics: "express",
   });
 
+  const markerVisibleDiameter = 36;
+  const markerHitTarget = 48;
+
   function iconIdFor(kind, service) {
     const markerKind = String(kind || "");
     if (markerKind === "booking") return serviceToIcon[String(service || "")] || "parcel";
@@ -56,8 +59,8 @@
     const statusRing = settings.active ? '<circle cx="39" cy="9" r="5" fill="#fff" stroke="#07151f" stroke-width="2"/>' : "";
     const selectedRing = settings.selected ? '<circle cx="24" cy="24" r="22" fill="none" stroke="#fff" stroke-width="2"/>' : "";
     return '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">' +
-      '<circle cx="24" cy="24" r="21" fill="' + icon.color + '" stroke="#07151f" stroke-width="3"/>' +
-      '<g fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">' + icon.glyph + '</g>' +
+      '<circle cx="24" cy="24" r="18" fill="' + icon.color + '" stroke="#07151f" stroke-width="2"/>' +
+      '<g transform="translate(6 6) scale(.75)" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">' + icon.glyph + '</g>' +
       selectedRing + statusRing + '</svg>';
   }
 
@@ -85,6 +88,8 @@
     iconIdFor: iconIdFor,
     routeColorForService: routeColorForService,
     svgFor: svgFor,
+    markerVisibleDiameter: markerVisibleDiameter,
+    markerHitTarget: markerHitTarget,
   });
   root.IDMMapLayering = { promote: promote, areMarkersAboveLabels: areMarkersAboveLabels };
 })(window);

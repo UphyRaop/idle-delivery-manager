@@ -54,6 +54,7 @@ var autosave_elapsed := 0.0
 var next_order_id := 1
 var next_rider_id := 1
 var selected_order := -1
+var selected_rider_id := -1
 var map_view: Control
 var order_list: VBoxContainer
 var rider_summary: Label
@@ -1225,7 +1226,7 @@ func _sync_geographic_overlays() -> void:
 	if not _javascript_truth(_maplibre_call("Boolean(window.IDMMap && window.IDMMap.setGameplayOverlays && window.IDMMap.setRiderPositions)")):
 		return
 	var selected := _find_order(selected_order)
-	var signature_data: Array = [selected_order]
+	var signature_data: Array = [selected_order, selected_rider_id]
 	for order in orders:
 		signature_data.append([
 			int(order.get("id", -1)), str(order.get("status", "")),
@@ -1247,7 +1248,7 @@ func _sync_geographic_overlays() -> void:
 			"service": assigned_service,
 			"accessibleLabel": "%s partner %02d" % ["Active" if rider_busy else "Available", rider_id],
 			"status": str(rider.get("status", "ready")),
-			"selected": not selected.is_empty() and int(selected.get("rider", -1)) == rider_id,
+			"selected": rider_id == selected_rider_id or (not selected.is_empty() and int(selected.get("rider", -1)) == rider_id),
 			"coordinates": [rider_geo.x, rider_geo.y],
 		})
 	if static_signature == geographic_static_overlay_signature:
@@ -1661,11 +1662,29 @@ func _select_marker(point: Vector2) -> void:
 		var parsed := JSON.new()
 		if parsed.parse(raw) != OK or typeof(parsed.data) != TYPE_DICTIONARY:
 			return
+		if str(parsed.data.get("kind", "")) == "rider":
+			var rider_id := int(parsed.data.get("riderId", -1))
+			var rider := _find_rider(rider_id)
+			if rider.is_empty():
+				return
+			selected_rider_id = rider_id
+			var active_order := _find_order(int(rider.get("order_id", -1))) if str(rider.get("status", "ready")) == "busy" else {}
+			if not active_order.is_empty() and str(active_order.get("status", "")) not in ["Delivered", "Cancelled"]:
+				selected_order = int(active_order.get("id", -1))
+				sheet_expanded = true
+				status_label.text = "Active partner %02d · booking %03d" % [rider_id, selected_order]
+			else:
+				selected_order = -1
+				sheet_expanded = false
+				status_label.text = "Available partner %02d · ready for a booking" % rider_id
+			_refresh()
+			return
 		var booking_id := int(parsed.data.get("bookingId", -1))
 		var booking := _find_order(booking_id)
-		if booking.is_empty() or str(booking.get("status", "")) != "Waiting":
+		if booking.is_empty() or str(booking.get("status", "")) in ["Delivered", "Cancelled"]:
 			return
 		selected_order = booking_id
+		selected_rider_id = int(booking.get("rider", -1)) if str(booking.get("status", "")).begins_with("On route") else -1
 		sheet_expanded = true
 		status_label.text = ""
 		_refresh()
