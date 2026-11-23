@@ -72,6 +72,17 @@ func control_width(token: String) -> int:
 func panel_padding(token: String) -> int:
 	return {"compact": 6, "standard": 10, "roomy": 14}.get(token, 10)
 
+## Compact content rhythm used by game pages, cards and dialogs. Interactive
+## control heights remain separate so denser layouts do not shrink hit targets.
+func dense_space(token: String) -> int:
+	return {"xxs": 2, "xs": 3, "sm": 4, "card": 5, "section": 8, "md": 7, "lg": 10, "xl": 12}.get(token, 7)
+
+func dense_font_size(token: String) -> int:
+	return {"caption": 11, "body": 13, "section": 15, "title": 18, "metric": 16}.get(token, 13)
+
+func dense_panel_padding(token: String) -> int:
+	return {"compact": 4, "standard": 7, "roomy": 10}.get(token, 7)
+
 func resolve_existing_text(original: Color) -> Color:
 	if mode == "dark":
 		return original
