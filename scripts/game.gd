@@ -380,15 +380,14 @@ func _render_main_menu() -> void:
 	center.offset_top = (safe_insets.y + 16) * ui_layout_scale
 	center.offset_bottom = -(safe_insets.w + 16) * ui_layout_scale
 	menu_overlay.add_child(center)
-	var card := PanelContainer.new()
-	var card_width := minf(390.0 * ui_layout_scale, maxf(0.0, viewport_size.x - (safe_insets.x + safe_insets.z + 36.0) * ui_layout_scale))
-	card.custom_minimum_size = Vector2(card_width, 0)
-	card.add_theme_stylebox_override("panel", _panel_style("#102433", 24))
-	center.add_child(card)
 	var column := VBoxContainer.new()
+	column.name = "MainMenuContent"
+	var menu_width := minf(480.0, maxf(0.0, viewport_size.x - safe_insets.x - safe_insets.z - 40.0 * ui_layout_scale))
+	column.custom_minimum_size.x = menu_width
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var compact := viewport_size.y <= 440.0
 	column.add_theme_constant_override("separation", int(round((ThemeService.dense_space("sm") if compact else ThemeService.dense_space("md")) * ui_layout_scale)))
-	card.add_child(column)
+	center.add_child(column)
 	if menu_settings_open:
 		column.add_child(_label("SETTINGS", 19, "#f1f6fa"))
 		var settings_hint := _label("Change the interface appearance before starting or resuming a company.", 13, "#a8bac8")
@@ -403,23 +402,28 @@ func _render_main_menu() -> void:
 		column.add_child(back)
 		return
 	if viewport_size.x < 600.0:
-		var badge := CenterContainer.new()
-		badge.custom_minimum_size.y = 56.0 * ui_layout_scale
-		column.add_child(badge)
+		var identity := HBoxContainer.new()
+		identity.add_theme_constant_override("separation", int(round(ThemeService.dense_space("md") * ui_layout_scale)))
+		identity.alignment = BoxContainer.ALIGNMENT_CENTER
+		column.add_child(identity)
 		var mark := TextureRect.new()
 		mark.name = "IDMBrandIcon"
 		mark.texture = load("res://assets/branding/idm-app-icon.svg") as Texture2D
-		mark.custom_minimum_size = Vector2(54, 54) * ui_layout_scale
+		mark.custom_minimum_size = Vector2(56, 56) * ui_layout_scale
 		mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		badge.add_child(mark)
+		identity.add_child(mark)
+		var brand_text := VBoxContainer.new()
+		brand_text.add_theme_constant_override("separation", 1)
+		brand_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		identity.add_child(brand_text)
 		var title := _label("IDLE DELIVERY MANAGER", 19 if compact else 22, "#f1f6fa")
-		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		column.add_child(title)
+		title.name = "IDMMenuTitle"
+		title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		brand_text.add_child(title)
 		var tagline := _label("Build Your Logistics Empire", 12 if compact else 14, "#45d9ec")
-		tagline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		column.add_child(tagline)
+		tagline.name = "IDMMenuTagline"
+		brand_text.add_child(tagline)
 	else:
 		var logo := TextureRect.new()
 		logo.name = "IDMFullLogo"
@@ -427,24 +431,76 @@ func _render_main_menu() -> void:
 		logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		logo.tooltip_text = "IDLE DELIVERY MANAGER — Build Your Logistics Empire"
-		var logo_width := maxf(220.0, card_width - 40.0 * ui_layout_scale)
-		logo.custom_minimum_size = Vector2(logo_width, logo_width * 192.0 / 920.0) * ui_layout_scale
+		var logo_width := minf(menu_width, maxf(220.0, menu_width - 20.0 * ui_layout_scale))
+		logo.custom_minimum_size = Vector2(logo_width, logo_width * 192.0 / 920.0)
 		column.add_child(logo)
+	var continue_path := _latest_valid_save_path()
+	var latest_payload: Dictionary = {}
+	if not continue_path.is_empty():
+		var latest_slot := _manual_slot_id_for_path(continue_path)
+		latest_payload = _manual_slot_payload(latest_slot) if latest_slot > 0 else _save_payload_for_path(continue_path)
+	if not latest_payload.is_empty():
+		column.add_child(_last_session_dashboard(latest_payload))
 	column.add_child(_menu_button("New Game", _confirm_new_game, true))
 	var continue_button := _menu_button("Continue", _continue_game, false)
-	var continue_path := _latest_valid_save_path()
 	continue_button.disabled = continue_path.is_empty()
 	continue_button.tooltip_text = "Continue the most recently saved valid game" if not continue_path.is_empty() else "No valid saved game is available"
 	column.add_child(continue_button)
 	column.add_child(_menu_button("Load Game", _show_load_game, false))
 	column.add_child(_menu_button("Settings", _open_menu_settings, false))
+	var footer := VBoxContainer.new()
+	footer.name = "MainMenuCredits"
+	footer.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	footer.offset_left = (safe_insets.x + 16.0) * ui_layout_scale
+	footer.offset_right = viewport_size.x - (safe_insets.z + 16.0) * ui_layout_scale
+	footer.offset_top = viewport_size.y - safe_insets.w - 58.0 * ui_layout_scale
+	footer.offset_bottom = viewport_size.y - safe_insets.w - 8.0 * ui_layout_scale
+	footer.add_theme_constant_override("separation", 1)
+	menu_overlay.add_child(footer)
 	var creator := _label("Created by UphyRaop", 11, "#8199aa")
+	creator.name = "MainMenuCreatorCredit"
 	creator.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	column.add_child(creator)
+	footer.add_child(creator)
 	var copyright := _label("© 2026 UR Trade Network. All rights reserved.", 10, "#8199aa")
+	copyright.name = "MainMenuCopyright"
 	copyright.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	copyright.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	column.add_child(copyright)
+	copyright.custom_minimum_size.y = 16.0 * ui_layout_scale
+	copyright.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	footer.add_child(copyright)
+
+func _last_session_dashboard(payload: Dictionary) -> Control:
+	var dashboard := PanelContainer.new()
+	dashboard.name = "LastSessionDashboard"
+	dashboard.add_theme_stylebox_override("panel", _panel_style(ThemeService.color("panel").to_html(), 16))
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", ThemeService.dense_space("xs"))
+	dashboard.add_child(content)
+	var availability := _label("LAST SESSION · VALID SAVE", 11, "#45d9ec")
+	availability.name = "LastSessionStatus"
+	content.add_child(availability)
+	var company_data: Dictionary = payload.get("company", {})
+	var company_name := str(company_data.get("name", "")).strip_edges()
+	var saved_company := _label(company_name if not company_name.is_empty() else "Company name unavailable", 15, "#f1f6fa")
+	saved_company.name = "LastSessionCompany"
+	saved_company.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	content.add_child(saved_company)
+	var stats := HBoxContainer.new()
+	stats.add_theme_constant_override("separation", ThemeService.dense_space("md"))
+	content.add_child(stats)
+	var cash_text := _format_rm(float(payload.get("cash", 0.0))) if payload.has("cash") else "Cash unavailable"
+	var day_text := _game_date_text(float(payload.get("elapsed", 0.0))) if payload.has("elapsed") else "Date unavailable"
+	var saved_cash := _label(cash_text, 12, "#53d5ba")
+	saved_cash.name = "LastSessionCash"
+	saved_cash.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	saved_cash.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	stats.add_child(saved_cash)
+	var saved_date := _label(day_text, 11, "#a8bac8")
+	saved_date.name = "LastSessionDate"
+	saved_date.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	saved_date.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	saved_date.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	stats.add_child(saved_date)
+	return dashboard
 
 func _menu_button(text: String, callback: Callable, primary: bool) -> Button:
 	var button := _button(text, callback)

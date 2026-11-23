@@ -23,6 +23,8 @@ func _run() -> void:
 	_check(not bool(game.get("game_session_started")), "startup does not start a simulation session")
 	var menu: Control = game.get("menu_overlay")
 	_check(is_instance_valid(menu), "main menu overlay is available")
+	var initial_content := menu.find_child("MainMenuContent", true, false) as VBoxContainer
+	_check(initial_content.get_parent() is CenterContainer, "full-screen menu content is not wrapped in an oversized outer panel")
 	var speed_buttons: Dictionary = game.get("speed_buttons")
 	_check(speed_buttons.keys().size() == 5 and speed_buttons.has(1) and speed_buttons.has(5) and speed_buttons.has(10) and speed_buttons.has(50) and speed_buttons.has(100) and not speed_buttons.has(2), "speed selector exposes exactly 1x, 5x, 10x, 50x and 100x")
 	var labels := _all_text(menu)
@@ -61,6 +63,9 @@ func _run() -> void:
 	old_file.store_string(JSON.stringify(old_data))
 	old_file.close()
 	game.set("save_path", latest_path)
+	game.set("player_company_name", "Kampung Pandan Courier Sdn. Bhd.")
+	game.set("player_starting_location", "Kampung Pandan")
+	game.set("elapsed", 2.0 * 86400.0 + 9.0 * 3600.0)
 	game.set("cash", 222.0)
 	game.call("_save_game")
 	var latest_file := FileAccess.open(latest_path, FileAccess.READ)
@@ -79,6 +84,16 @@ func _run() -> void:
 		{"path": invalid_path, "created_at": latest_saved_at + 100, "map_space": "legacy_normalized"},
 	]
 	game.set("save_profiles", test_profiles)
+	game.call("_render_main_menu")
+	await process_frame
+	menu = game.get("menu_overlay")
+	var dashboard := menu.find_child("LastSessionDashboard", true, false) as PanelContainer
+	_check(is_instance_valid(dashboard), "valid saved session adds the compact last-session dashboard")
+	_check(str((dashboard.find_child("LastSessionStatus", true, false) as Label).text) == "LAST SESSION · VALID SAVE", "dashboard identifies the session as a valid save")
+	_check(str((dashboard.find_child("LastSessionCompany", true, false) as Label).text) == "Kampung Pandan Courier Sdn. Bhd.", "dashboard uses the saved company name")
+	_check(str((dashboard.find_child("LastSessionCash", true, false) as Label).text) == "RM222.00" and str((dashboard.find_child("LastSessionDate", true, false) as Label).text).begins_with("Game Day 03"), "dashboard uses saved cash and in-game date")
+	var dashboard_continue: Button = _find_button(menu, "Continue")
+	_check(is_instance_valid(dashboard_continue) and not dashboard_continue.disabled, "Continue is enabled for the valid dashboard save")
 	_check(str(game.call("_latest_valid_save_path")) == latest_path, "Continue selects the most recent valid autosave, excluding invalid data")
 	_check(game.call("_save_payload_for_path", invalid_path).is_empty(), "invalid saves are not considered valid continuation targets")
 	game.set("save_path", old_path)
@@ -102,6 +117,43 @@ func _run() -> void:
 	var returned_data: Dictionary = game.call("_save_payload_for_path", latest_path)
 	_check(bool(game.get("main_menu_active")) and is_equal_approx(float(returned_data.get("cash", 0.0)), 222.0), "returning to the menu saves progress and stops the session")
 	_check(not map_legend.visible, "returning to the main menu hides the map legend")
+	var menu_viewports: Array[Vector2i] = [
+		Vector2i(360, 800), Vector2i(375, 812), Vector2i(390, 844), Vector2i(393, 852),
+		Vector2i(414, 896), Vector2i(430, 932), Vector2i(844, 390), Vector2i(768, 1024),
+		Vector2i(1024, 768), Vector2i(1366, 768),
+	]
+	for requested in menu_viewports:
+		root.size = requested
+		await process_frame
+		game.call("_layout_ui")
+		game.call("_render_main_menu")
+		await process_frame
+		menu = game.get("menu_overlay")
+		var content := menu.find_child("MainMenuContent", true, false) as VBoxContainer
+		var content_rect := content.get_global_rect()
+		var footer := menu.find_child("MainMenuCredits", true, false) as VBoxContainer
+		var footer_rect := footer.get_global_rect()
+		var settings_rect := _find_button(menu, "Settings").get_global_rect()
+		var copyright_label := menu.find_child("MainMenuCopyright", true, false) as Label
+		var viewport: Vector2 = game.get("viewport_size")
+		var actions_inside := true
+		for action_name in ["New Game", "Continue", "Load Game", "Settings"]:
+			var action_button: Button = _find_button(menu, action_name)
+			if action_button == null:
+				actions_inside = false
+				continue
+			var action_rect: Rect2 = action_button.get_global_rect()
+			if action_rect.position.x < 0.0 or action_rect.end.x > viewport.x or action_rect.position.y < 0.0 or action_rect.end.y > viewport.y:
+				actions_inside = false
+		var viewport_labels := _all_text(menu)
+		_check(content_rect.position.x >= 0.0 and content_rect.end.x <= viewport.x, "main menu content fits horizontally at %dx%d" % [requested.x, requested.y])
+		_check(actions_inside, "all four actions stay in the viewport at %dx%d" % [requested.x, requested.y])
+		_check(viewport_labels.has("Created by UphyRaop") and viewport_labels.has("© 2026 UR Trade Network. All rights reserved."), "creator and copyright remain in the menu at %dx%d" % [requested.x, requested.y])
+		_check(footer_rect.position.y >= 0.0 and footer_rect.end.y <= viewport.y and footer.visible, "menu credits remain visibly inside %dx%d" % [requested.x, requested.y])
+		_check(not footer_rect.intersects(settings_rect), "footer does not overlap menu actions at %dx%d" % [requested.x, requested.y])
+		_check(copyright_label.get_global_rect().size.y >= 12.0 and copyright_label.visible, "copyright has visible line height at %dx%d" % [requested.x, requested.y])
+		if requested.x < 600:
+			_check(is_instance_valid(menu.find_child("IDMMenuTitle", true, false)) and is_instance_valid(menu.find_child("IDMMenuTagline", true, false)), "mobile menu shows explicit brand title and subtitle at %dx%d" % [requested.x, requested.y])
 	print("MAIN MENU RESULT: %d passed, %d failed" % [passed, failed])
 	for path in [old_path, latest_path, invalid_path]:
 		if FileAccess.file_exists(path):
@@ -118,3 +170,12 @@ func _all_text(node: Node) -> Array[String]:
 	for child in node.get_children():
 		values.append_array(_all_text(child))
 	return values
+
+func _find_button(node: Node, target: String) -> Button:
+	if node is Button and (node as Button).text == target:
+		return node as Button
+	for child in node.get_children():
+		var found := _find_button(child, target)
+		if found != null:
+			return found
+	return null
