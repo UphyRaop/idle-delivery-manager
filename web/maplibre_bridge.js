@@ -47,6 +47,7 @@
   let followFrame = 0;
   let lastFollowTime = 0;
   const blockedPointers = new Set();
+  const attributionPointers = new Map();
   const activePointers = new Map();
   const activeTouches = new Map();
   let lastTouchTap = null;
@@ -111,8 +112,9 @@
         minZoom: MIN_ZOOM,
         maxZoom: MAX_ZOOM,
         // OpenFreeMap serves CORS-enabled styles and tiles suitable for use
-        // from this production origin. Keep its required source attribution
-        // expanded so it remains legible on mobile.
+        // from this production origin. Keep the required source attribution
+        // collapsed to a small corner control; MapLibre expands its linked
+        // provider credits when the player opens it.
         attributionControl: false,
         logoPosition: "bottom-left",
         pitch: 0,
@@ -132,12 +134,25 @@
         clickTolerance: 8,
         trackResize: true,
       });
-      map.addControl(new window.maplibregl.AttributionControl({ compact: false }), "top-left");
+      const attributionControl = new window.maplibregl.AttributionControl({ compact: true });
+      map.addControl(attributionControl, "top-left");
+      const attributionElement = root.querySelector(".maplibregl-ctrl-attrib");
+      if (!attributionElement) throw new Error("MapLibre attribution control was not created.");
+      attributionElement.id = "idm-map-attribution";
+      // Escape the basemap's z-index layer so the credit button is visible and
+      // natively interactive above the full-screen Godot canvas.
+      document.body.appendChild(attributionElement);
       appliedTheme = themeMode;
 
       map.touchZoomRotate.disableRotation();
       map.on("load", function () {
         ready = true;
+        // Compact mode is applied on MapLibre's first measured resize. Collapse
+        // its initial credits panel after that pass, leaving a corner toggle.
+        window.requestAnimationFrame(function () {
+          const attributionToggle = attributionElement.querySelector(".maplibregl-ctrl-attrib-button");
+          if (attributionToggle && attributionElement.classList.contains("maplibregl-compact-show")) attributionToggle.click();
+        });
         emit("idm-map-ready", getCamera());
       });
       map.on("style.load", function () {
@@ -190,15 +205,69 @@
       return;
     }
     canvasEventsBound = true;
-    canvas.addEventListener("pointerdown", function (event) { forwardPointerEvent(event); }, { capture: true, passive: true });
-    window.addEventListener("pointermove", function (event) { forwardPointerEvent(event); }, { capture: true, passive: true });
-    window.addEventListener("pointerup", function (event) { forwardPointerEvent(event); }, { capture: true, passive: true });
-    window.addEventListener("pointercancel", function (event) { forwardPointerEvent(event); }, { capture: true, passive: true });
+    canvas.addEventListener("pointerdown", function (event) {
+      if (isAttributionControlEvent(event)) return;
+      if (!forwardAttributionPointer(event)) forwardPointerEvent(event);
+    }, { capture: true, passive: false });
+    window.addEventListener("pointermove", function (event) {
+      if (isAttributionControlEvent(event)) return;
+      if (!forwardAttributionPointer(event)) forwardPointerEvent(event);
+    }, { capture: true, passive: false });
+    window.addEventListener("pointerup", function (event) {
+      if (isAttributionControlEvent(event)) return;
+      if (!forwardAttributionPointer(event)) forwardPointerEvent(event);
+    }, { capture: true, passive: false });
+    window.addEventListener("pointercancel", function (event) {
+      if (isAttributionControlEvent(event)) return;
+      if (!forwardAttributionPointer(event)) forwardPointerEvent(event);
+    }, { capture: true, passive: false });
     canvas.addEventListener("dblclick", function (event) { forwardPointerEvent(event); }, { capture: true });
     canvas.addEventListener("wheel", function (event) {
       const handled = forwardPointerEvent(event);
       if (handled) event.preventDefault();
     }, { capture: true, passive: false });
+  }
+
+  function isAttributionControlEvent(event) {
+    const target = event && event.target;
+    return Boolean(target && typeof target.closest === "function" && target.closest("#idm-map-attribution"));
+  }
+
+  // Godot's canvas is composited above the MapLibre DOM controls. Route taps
+  // in the compact credit affordance to MapLibre and keep them out of game/map
+  // gestures, otherwise a visible attribution control cannot be opened.
+  function forwardAttributionPointer(event) {
+    if (!event || !event.isTrusted || !mapRoot) return false;
+    const id = pointerId(event);
+    const type = eventType(event);
+    const point = eventPoint(event);
+    const active = attributionPointers.get(id);
+    const button = document.querySelector("#idm-map-attribution .maplibregl-ctrl-attrib-button");
+    const rect = button ? button.getBoundingClientRect() : null;
+    const insideButton = Boolean(rect && point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom);
+
+    if (!active && type === "pointerdown" && event.button === 0 && insideButton) {
+      attributionPointers.set(id, { x: point.x, y: point.y, moved: false });
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return true;
+    }
+    if (!active) return false;
+
+    if (type === "pointermove") {
+      if (Math.hypot(point.x - active.x, point.y - active.y) > 8) active.moved = true;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return true;
+    }
+    if (type === "pointerup" || type === "pointercancel") {
+      attributionPointers.delete(id);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (type === "pointerup" && !active.moved && insideButton && button) button.click();
+      return true;
+    }
+    return false;
   }
 
   function applyRoadHierarchy() {
