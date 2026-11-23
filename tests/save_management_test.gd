@@ -58,9 +58,43 @@ func _run() -> void:
 	var save_game_button := _find_button(game.get("order_list"), "Save Game")
 	if save_game_button != null:
 		save_game_button.emit_signal("pressed")
+	await process_frame
 	var overlay: Control = game.get("save_overlay")
 	_check(overlay.name == "ManualSaveOverlay", "Settings Save Game opens the manual slot manager")
 	_check(overlay.find_children("", "Button", true, false).size() == 4, "all three manual slots and Return to Game are visible")
+	var slot_one := overlay.find_child("ManualSaveSlot1", true, false) as PanelContainer
+	var slot_two := overlay.find_child("ManualSaveSlot2", true, false) as PanelContainer
+	var slot_three := overlay.find_child("ManualSaveSlot3", true, false) as PanelContainer
+	_check(is_instance_valid(slot_one) and slot_one.get_child(0) is HBoxContainer and is_instance_valid(slot_two) and slot_two.get_child(0) is HBoxContainer and is_instance_valid(slot_three) and slot_three.get_child(0) is HBoxContainer, "all manual slots use full-width horizontal rows")
+	_check(_find_button(slot_one, "Save") != null and _find_button(overlay, "Return to Game") != null, "empty slot has Save action and popup has Return to Game")
+	var save_card := overlay.find_child("ManualSaveCard", true, false) as PanelContainer
+	var save_card_rect := save_card.get_global_rect()
+	var logical_viewport: Vector2 = game.get("viewport_size")
+	_check(save_card_rect.position.x >= 0.0 and save_card_rect.end.x <= logical_viewport.x, "save popup fits inside the mobile logical viewport")
+	_check(slot_one.get_global_rect().size.x >= save_card_rect.size.x - 60.0, "manual slot rows expand to the popup's full content width")
+	var save_action := _find_button(slot_one, "Save")
+	var save_action_rect := save_action.get_global_rect()
+	_check(save_action_rect.size.x >= 80.0 and save_action_rect.size.y >= 44.0 and save_action_rect.end.x <= logical_viewport.x, "Save action stays touch-sized and visible")
+	var save_viewports: Array[Vector2i] = [
+		Vector2i(360, 800), Vector2i(375, 812), Vector2i(390, 844), Vector2i(393, 852),
+		Vector2i(414, 896), Vector2i(430, 932), Vector2i(844, 390), Vector2i(768, 1024),
+		Vector2i(1024, 768), Vector2i(1366, 768),
+	]
+	for requested in save_viewports:
+		root.size = requested
+		await process_frame
+		game.call("_layout_ui")
+		await process_frame
+		var resized_viewport: Vector2 = game.get("viewport_size")
+		var resized_card_rect := save_card.get_global_rect()
+		var resized_slot_rect := slot_one.get_global_rect()
+		var resized_action_rect := save_action.get_global_rect()
+		_check(resized_card_rect.position.x >= 0.0 and resized_card_rect.end.x <= resized_viewport.x and resized_card_rect.position.y >= 0.0 and resized_card_rect.end.y <= resized_viewport.y, "save popup stays within %dx%d viewport" % [requested.x, requested.y])
+		_check(resized_slot_rect.position.x >= resized_card_rect.position.x and resized_slot_rect.end.x <= resized_card_rect.end.x and resized_action_rect.end.x <= resized_slot_rect.end.x, "save slot row and action stay inside the popup at %dx%d" % [requested.x, requested.y])
+	root.size = Vector2i(390, 844)
+	await process_frame
+	game.call("_layout_ui")
+	await process_frame
 	_check(not game.call("_manual_slot_exists", 1), "manual slots are initially separate and empty")
 	_check(bool(game.call("_save_manual_slot", 1)), "first manual save writes to Slot 1")
 	var first_snapshot: Dictionary = game.call("_manual_slot_payload", 1)
@@ -72,6 +106,8 @@ func _run() -> void:
 	var metadata := str(game.call("_save_metadata_text", first_snapshot))
 	_check(metadata.contains("Kampung Pandan Courier") and metadata.contains("Game Day 03") and metadata.contains("Kampung Pandan") and metadata.contains("UTC"), "slot metadata shows company, game date, location, and saved timestamp")
 	game.call("_show_manual_save_slots")
+	var overwrite_action := _find_button(game.get("save_overlay"), "Overwrite")
+	_check(overwrite_action != null, "occupied slot row presents an Overwrite action")
 	game.set("cash", 999.0)
 	_check(not bool(game.call("_save_manual_slot", 1)), "occupied manual slot requires overwrite confirmation")
 	var confirm: Control = game.get("overwrite_confirmation_overlay")
