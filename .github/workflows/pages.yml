@@ -45,6 +45,7 @@ jobs:
       - name: Run road routing and movement regression tests
         run: |
           node tests/map_overlay_layers_test.js
+          node tests/map_icon_registry_test.js
           godot --headless --path . --script tests/road_router_acceptance.gd
           godot --headless --path . --script tests/route_simulation_test.gd
           godot --headless --path . --script tests/map_camera_test.gd

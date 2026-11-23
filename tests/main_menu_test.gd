@@ -48,13 +48,15 @@ func _run() -> void:
 	var old_path := "user://delivery_ops_session_menu_test_old.json"
 	var latest_path := "user://delivery_ops_session_menu_test_latest.json"
 	var invalid_path := "user://delivery_ops_session_menu_test_invalid.json"
+	var old_saved_at := int(Time.get_unix_time_from_system()) + 100
+	var latest_saved_at := old_saved_at + 100
 	game.set("save_path", old_path)
 	game.set("cash", 111.0)
 	game.call("_save_game")
 	var old_file := FileAccess.open(old_path, FileAccess.READ)
 	var old_data := JSON.parse_string(old_file.get_as_text()) as Dictionary
 	old_file.close()
-	old_data["saved_at"] = 100
+	old_data["saved_at"] = old_saved_at
 	old_file = FileAccess.open(old_path, FileAccess.WRITE)
 	old_file.store_string(JSON.stringify(old_data))
 	old_file.close()
@@ -64,7 +66,7 @@ func _run() -> void:
 	var latest_file := FileAccess.open(latest_path, FileAccess.READ)
 	var latest_data := JSON.parse_string(latest_file.get_as_text()) as Dictionary
 	latest_file.close()
-	latest_data["saved_at"] = 200
+	latest_data["saved_at"] = latest_saved_at
 	latest_file = FileAccess.open(latest_path, FileAccess.WRITE)
 	latest_file.store_string(JSON.stringify(latest_data))
 	latest_file.close()
@@ -72,9 +74,9 @@ func _run() -> void:
 	invalid_file.store_string("{broken")
 	invalid_file.close()
 	var test_profiles: Array[Dictionary] = [
-		{"path": old_path, "created_at": 100, "map_space": "legacy_normalized"},
-		{"path": latest_path, "created_at": 200, "map_space": "kl_selangor_web_mercator_uv"},
-		{"path": invalid_path, "created_at": 300, "map_space": "legacy_normalized"},
+		{"path": old_path, "created_at": old_saved_at, "map_space": "legacy_normalized"},
+		{"path": latest_path, "created_at": latest_saved_at, "map_space": "kl_selangor_web_mercator_uv"},
+		{"path": invalid_path, "created_at": latest_saved_at + 100, "map_space": "legacy_normalized"},
 	]
 	game.set("save_profiles", test_profiles)
 	_check(str(game.call("_latest_valid_save_path")) == latest_path, "Continue selects the most recent valid autosave, excluding invalid data")
@@ -83,6 +85,12 @@ func _run() -> void:
 	game.call("_continue_game")
 	_check(not bool(game.get("main_menu_active")), "Continue opens the selected save without creating another game instance")
 	_check(str(game.get("save_path")) == latest_path and is_equal_approx(float(game.get("cash")), 222.0), "Continue restores the newest save profile")
+	var map_legend: Control = game.get("map_legend_panel")
+	_check(is_instance_valid(map_legend) and not map_legend.visible, "map icon legend is available but compactly hidden by default")
+	game.call("_toggle_map_legend")
+	_check(map_legend.visible, "map icon legend opens during gameplay")
+	game.call("_toggle_map_legend")
+	_check(not map_legend.visible, "map icon legend closes on demand")
 	game.set("sheet_expanded", true)
 	game.call("_layout_ui")
 	var sheet: Control = game.get("sheet")
@@ -93,6 +101,7 @@ func _run() -> void:
 	game.call("_confirm_return_to_menu")
 	var returned_data: Dictionary = game.call("_save_payload_for_path", latest_path)
 	_check(bool(game.get("main_menu_active")) and is_equal_approx(float(returned_data.get("cash", 0.0)), 222.0), "returning to the menu saves progress and stops the session")
+	_check(not map_legend.visible, "returning to the main menu hides the map legend")
 	print("MAIN MENU RESULT: %d passed, %d failed" % [passed, failed])
 	for path in [old_path, latest_path, invalid_path]:
 		if FileAccess.file_exists(path):
