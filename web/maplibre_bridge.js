@@ -33,7 +33,6 @@
   const GAME_ROUTE_CASING_LAYER = "idm-game-route-casing";
   const GAME_ROUTE_LAYER = "idm-game-routes-line";
   const GAME_MARKER_LAYER = "idm-game-markers-circle";
-  const GAME_MARKER_LABEL_LAYER = "idm-game-markers-label";
 
   let map = null;
   let mapRoot = null;
@@ -59,6 +58,8 @@
   const renderedRiderMarkers = new Map();
   let gameplayRouteSignature = "";
   let gameplayMarkerSignature = "";
+  let gameplayIconsReady = false;
+  let iconInstallGeneration = 0;
 
   function ensureRoot() {
     let root = document.getElementById(MAP_ROOT_ID);
@@ -147,8 +148,12 @@
           // during that period and must not suppress gameplay overlays.
           styleReady = true;
           ready = true;
-          ensureGameplayOverlays();
-          syncDynamicRiderMarkers();
+          gameplayIconsReady = false;
+          installGameplayIconSprites().then(function (installed) {
+            if (!installed || !map || !styleReady) return;
+            ensureGameplayOverlays();
+            syncDynamicRiderMarkers();
+          });
           emit("idm-map-style-ready", { theme: themeMode });
           window.setTimeout(applyRoadHierarchy, 700);
         }
@@ -283,13 +288,20 @@
       if (!route || typeof route !== "object") return;
       const id = String(route.id === undefined ? "" : route.id).trim();
       const phase = route.phase === "pickup" ? "pickup" : route.phase === "delivery" ? "delivery" : "";
+      const service = String(route.service === undefined ? "" : route.service).trim();
       const coordinates = cleanCoordinates(route.coordinates, 2);
       if (!id || ids.has(id) || !phase || !coordinates) return;
       ids.add(id);
       features.push({
         type: "Feature",
         id: "route:" + id,
-        properties: { route_id: id, phase: phase, selected: Boolean(route.selected) },
+        properties: {
+          route_id: id,
+          phase: phase,
+          service: service,
+          route_color: window.IDMMapIcons ? window.IDMMapIcons.routeColorForService(service) : "#22C55E",
+          selected: Boolean(route.selected),
+        },
         geometry: { type: "LineString", coordinates: coordinates },
       });
     });
@@ -318,7 +330,8 @@
           kind: kind,
           status: status,
           service: service,
-          label: String(marker.label === undefined ? "" : marker.label).slice(0, 4),
+          icon: window.IDMMapIcons ? window.IDMMapIcons.iconIdFor(kind, service) : "parcel",
+          accessible_label: String(marker.accessibleLabel || marker.label || "").slice(0, 80),
           selected: Boolean(marker.selected),
         },
         geometry: { type: "Point", coordinates: coordinates[0] },
@@ -328,7 +341,7 @@
   }
 
   function isRiderKind(kind) {
-    return kind === "rider" || kind === "rider_available" || kind === "rider_active";
+    return kind === "rider" || kind === "rider_available" || kind === "rider_active" || kind === "driver_car" || kind === "express_truck";
   }
 
   function riderMarkerMap(markers) {
@@ -343,21 +356,16 @@
         coordinates: coordinates[0],
         kind: kind,
         status: String(marker.status === undefined ? "ready" : marker.status),
-        label: String(marker.label === undefined ? "R" : marker.label).slice(0, 4),
+        service: String(marker.service === undefined ? "" : marker.service).trim(),
+        iconId: window.IDMMapIcons ? window.IDMMapIcons.iconIdFor(kind, marker.service) : "rider_bicycle",
         selected: Boolean(marker.selected),
       });
     });
     return result;
   }
 
-  function riderMarkerColor(rider) {
-    if (rider.selected) return "#ffcf63";
-    if (rider.kind === "rider_active" || rider.status === "busy") return "#9c8cff";
-    return "#39d5e8";
-  }
-
   function syncDynamicRiderMarkers() {
-    if (!map || !window.maplibregl || typeof window.maplibregl.Marker !== "function") return false;
+    if (!map || !window.maplibregl || typeof window.maplibregl.Marker !== "function" || !window.IDMMapIcons) return false;
     const wanted = new Set();
     gameplayRiders.forEach(function (rider, id) {
       wanted.add(id);
@@ -366,15 +374,12 @@
         const element = document.createElement("div");
         element.className = "idm-map-rider-marker";
         element.setAttribute("role", "img");
-        element.style.width = "38px";
-        element.style.height = "38px";
+        element.style.width = "32px";
+        element.style.height = "32px";
         element.style.boxSizing = "border-box";
-        element.style.display = "grid";
-        element.style.placeItems = "center";
-        element.style.borderRadius = "50%";
-        element.style.border = "2px solid #0a1a25";
-        element.style.color = "#07151f";
-        element.style.font = "700 15px/1 system-ui, sans-serif";
+        element.style.display = "block";
+        element.style.background = "transparent";
+        element.style.border = "0";
         element.style.pointerEvents = "none";
         element.style.userSelect = "none";
         element.style.willChange = "transform";
@@ -383,11 +388,11 @@
         rendered = { marker: marker, element: element, coordinates: null };
         renderedRiderMarkers.set(id, rendered);
       }
-      rendered.element.style.backgroundColor = riderMarkerColor(rider);
-      rendered.element.style.width = rider.selected ? "42px" : "38px";
-      rendered.element.style.height = rider.selected ? "42px" : "38px";
-      rendered.element.textContent = rider.label || "R";
-      rendered.element.setAttribute("aria-label", (rider.status === "busy" ? "Active partner " : "Available partner ") + id);
+      const active = rider.status === "busy" || rider.kind === "rider_active";
+      rendered.element.style.width = rider.selected ? "36px" : "32px";
+      rendered.element.style.height = rider.selected ? "36px" : "32px";
+      rendered.element.innerHTML = window.IDMMapIcons.svgFor(rider.iconId, { active: active, selected: rider.selected });
+      rendered.element.setAttribute("aria-label", (active ? "Active partner " : "Available partner ") + id + (rider.service ? " · " + rider.service.replaceAll("_", " ") : ""));
       if (!rendered.coordinates || rendered.coordinates[0] !== rider.coordinates[0] || rendered.coordinates[1] !== rider.coordinates[1]) {
         rendered.marker.setLngLat(rider.coordinates);
         rendered.coordinates = rider.coordinates.slice();
@@ -419,13 +424,50 @@
   // basemap label regardless of provider style ordering or reloads.
   function placeGameplayMarkersAboveBasemap() {
     if (!map) return false;
-    if (window.IDMMapLayering) return window.IDMMapLayering.promote(map, [GAME_MARKER_LAYER, GAME_MARKER_LABEL_LAYER]);
-    [GAME_MARKER_LAYER, GAME_MARKER_LABEL_LAYER].forEach(function (id) { if (map.getLayer(id)) map.moveLayer(id); });
+    if (window.IDMMapLayering) return window.IDMMapLayering.promote(map, [GAME_MARKER_LAYER]);
+    if (map.getLayer(GAME_MARKER_LAYER)) map.moveLayer(GAME_MARKER_LAYER);
     return true;
   }
 
+  function installGameplayIconSprites() {
+    if (!map || !styleReady || !window.IDMMapIcons || typeof window.Image !== "function") return Promise.resolve(false);
+    const generation = ++iconInstallGeneration;
+    const iconIds = window.IDMMapIcons.iconIds;
+    return Promise.all(iconIds.map(function (iconId) {
+      if (map.hasImage(iconId)) return Promise.resolve([iconId, null]);
+      return new Promise(function (resolve) {
+        const image = new window.Image();
+        image.onload = function () { resolve([iconId, image]); };
+        image.onerror = function () { resolve([iconId, null]); };
+        image.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(window.IDMMapIcons.svgFor(iconId));
+      });
+    })).then(function (images) {
+      if (!map || !styleReady || generation !== iconInstallGeneration) return false;
+      let complete = true;
+      images.forEach(function (entry) {
+        const iconId = entry[0];
+        const image = entry[1];
+        if (map.hasImage(iconId)) return;
+        if (!image) {
+          complete = false;
+          emit("idm-map-error", { message: "Map icon could not load: " + iconId });
+          return;
+        }
+        // The SVG is already authored at 48×48. Register at 1× so icon-size
+        // remains expressed in the intended CSS-pixel scale on every DPR.
+        try { map.addImage(iconId, image, { pixelRatio: 1 }); }
+        catch (error) {
+          complete = false;
+          emit("idm-map-error", { message: "Map icon could not be registered: " + iconId + " · " + String(error && error.message ? error.message : error) });
+        }
+      });
+      gameplayIconsReady = complete;
+      return complete;
+    });
+  }
+
   function ensureGameplayOverlays() {
-    if (!map || !styleReady || !map.getStyle() || !Array.isArray(map.getStyle().layers)) return false;
+    if (!map || !styleReady || !gameplayIconsReady || !map.getStyle() || !Array.isArray(map.getStyle().layers)) return false;
     try {
       if (!map.getSource(GAME_ROUTES_SOURCE)) {
         map.addSource(GAME_ROUTES_SOURCE, { type: "geojson", data: gameplayRoutes });
@@ -450,46 +492,27 @@
         source: GAME_ROUTES_SOURCE,
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
-          "line-color": ["match", ["get", "phase"], "pickup", "#ffcf63", "delivery", "#39d5e8", "#39d5e8"],
+          "line-color": ["get", "route_color"],
           "line-opacity": 0.97,
           "line-width": ["interpolate", ["linear"], ["zoom"], 8, ["case", ["get", "selected"], 3.2, 2.2], 14, ["case", ["get", "selected"], 5.2, 3.6], 19, ["case", ["get", "selected"], 7.2, 5]],
         },
       });
       addLayerBeforeLabels({
         id: GAME_MARKER_LAYER,
-        type: "circle",
-        source: GAME_MARKERS_SOURCE,
-        paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, ["case", ["get", "selected"], 8.5, 7], 13, ["case", ["get", "selected"], 12.5, 10], 18, ["case", ["get", "selected"], 16, 13]],
-          "circle-color": ["case",
-            ["==", ["get", "kind"], "rider"], ["case", ["==", ["get", "status"], "busy"], "#9c8cff", "#39d5e8"],
-            ["==", ["get", "kind"], "booking"], ["match", ["get", "service"],
-              "food_delivery", "#ffb45e", "parcel_logistics", "#39d5e8",
-              "passenger_transport", "#76dca8", "same_day", "#ffcf63", "#39d5e8"],
-            ["match", ["get", "kind"],
-            "rider_available", "#39d5e8", "rider_active", "#9c8cff",
-            "booking_food", "#ffb45e", "booking_parcel", "#39d5e8",
-            "booking_passenger", "#76dca8", "booking_express", "#ffcf63",
-            "pickup", "#ffcf63", "destination", "#ff7185", "hub", "#82aaff", "#39d5e8"]],
-          "circle-stroke-color": ["case", ["get", "selected"], "#ffffff", "#0a1a25"],
-          "circle-stroke-width": ["case", ["get", "selected"], 3, 2],
-          "circle-opacity": 0.98,
-        },
-      });
-      addLayerBeforeLabels({
-        id: GAME_MARKER_LABEL_LAYER,
         type: "symbol",
         source: GAME_MARKERS_SOURCE,
         layout: {
-          "text-field": ["get", "label"],
-          "text-font": ["Noto Sans Bold"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 8, 10, 14, 12, 19, 14],
-          "text-allow-overlap": true,
-          "text-ignore-placement": true,
-          "text-anchor": "center",
-          "text-offset": [0, 0],
+          "icon-image": ["get", "icon"],
+          "icon-size": ["interpolate", ["linear"], ["zoom"], 8, ["case", ["get", "selected"], 0.68, 0.58], 14, ["case", ["get", "selected"], 0.75, 0.65], 19, ["case", ["get", "selected"], 0.82, 0.72]],
+          "icon-anchor": "center",
+          "icon-allow-overlap": true,
+          "icon-ignore-placement": true,
+          "icon-rotation-alignment": "viewport",
+          "icon-pitch-alignment": "viewport",
         },
-        paint: { "text-color": "#07151f", "text-halo-color": "#ffffff", "text-halo-width": 0.2 },
+        paint: {
+          "icon-opacity": 0.98,
+        },
       });
       setSourceDataIfChanged(GAME_ROUTES_SOURCE, gameplayRoutes, "routes");
       setSourceDataIfChanged(GAME_MARKERS_SOURCE, gameplayMarkers, "markers");
@@ -591,7 +614,7 @@
       dynamicRiderCount: renderedRiderMarkers.size,
       sourcesReady: Boolean(map && map.getSource(GAME_ROUTES_SOURCE) && map.getSource(GAME_MARKERS_SOURCE)),
       layersReady: Boolean(map && map.getLayer(GAME_ROUTE_LAYER) && map.getLayer(GAME_MARKER_LAYER)),
-      markerLayersAboveBasemapLabels: window.IDMMapLayering ? window.IDMMapLayering.areMarkersAboveLabels(layers, GAME_MARKER_LAYER, GAME_MARKER_LABEL_LAYER) : false,
+      markerLayersAboveBasemapLabels: window.IDMMapLayering ? window.IDMMapLayering.areMarkersAboveLabels(layers, GAME_MARKER_LAYER) : false,
     };
   }
 
@@ -674,6 +697,8 @@
     if (appliedTheme === mode) return true;
     // MapLibre preserves its current camera when replacing the style.
     styleReady = false;
+    gameplayIconsReady = false;
+    iconInstallGeneration += 1;
     map.setStyle(STYLE_URLS[mode], { diff: false });
     appliedTheme = mode;
     return true;

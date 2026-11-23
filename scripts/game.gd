@@ -80,6 +80,9 @@ var sheet_body: ScrollContainer
 var sheet_toggle_button: Button
 var sheet_header_label: Label
 var map_controls: GridContainer
+var map_legend_button: Button
+var map_legend_panel: PanelContainer
+var map_legend_open := false
 var fit_route_button: Button
 var follow_rider_button: Button
 var bottom_nav: PanelContainer
@@ -325,6 +328,11 @@ func _advance_simulation_tick() -> void:
 func _show_main_menu() -> void:
 	main_menu_active = true
 	menu_settings_open = false
+	map_legend_open = false
+	if is_instance_valid(map_legend_button):
+		map_legend_button.tooltip_text = "Show the map marker legend"
+		_set_button_variant(map_legend_button, "quiet")
+	_update_map_legend_visibility()
 	paused = true
 	simulation_clock.set_paused(true)
 	_close_save_overlay()
@@ -634,15 +642,18 @@ func _build_ui() -> void:
 	var recenter := _button("Center", _recenter_map)
 	fit_route_button = _button("Fit", _fit_selected_booking)
 	follow_rider_button = _button("Follow", _follow_selected_rider)
+	map_legend_button = _button("Key", _toggle_map_legend)
 	zoom_in.tooltip_text = "Zoom in"
 	zoom_out.tooltip_text = "Zoom out"
 	recenter.tooltip_text = "Center map"
 	fit_route_button.tooltip_text = "Fit selected booking or active route"
 	follow_rider_button.tooltip_text = "Follow selected delivery partner"
-	for control in [zoom_in, zoom_out, recenter, fit_route_button, follow_rider_button]:
+	map_legend_button.tooltip_text = "Show the map marker legend"
+	for control in [zoom_in, zoom_out, recenter, fit_route_button, follow_rider_button, map_legend_button]:
 		control.custom_minimum_size = Vector2(64, ThemeService.control_height("compact"))
 		control.add_theme_font_size_override("font_size", ThemeService.font_size("caption"))
 		map_controls.add_child(control)
+	_build_map_legend()
 
 	sheet = PanelContainer.new()
 	sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
@@ -743,6 +754,70 @@ func _panel_style(color: String, radius: int) -> StyleBoxFlat:
 	style.border_width_bottom = 1
 	style.border_color = ThemeService.color("panel_border")
 	return style
+
+func _build_map_legend() -> void:
+	map_legend_panel = PanelContainer.new()
+	map_legend_panel.name = "MapMarkerLegend"
+	map_legend_panel.add_theme_stylebox_override("panel", _panel_style("#102433", 16))
+	map_legend_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	map_legend_panel.visible = false
+	add_child(map_legend_panel)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 6)
+	map_legend_panel.add_child(column)
+	var header := HBoxContainer.new()
+	column.add_child(header)
+	var title := _label("MAP KEY", 12, "#45d9ec")
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	var close_button := _button("Close", _toggle_map_legend)
+	close_button.custom_minimum_size = Vector2(56, 44)
+	header.add_child(close_button)
+	var entries := GridContainer.new()
+	entries.columns = 2
+	entries.add_theme_constant_override("h_separation", 8)
+	entries.add_theme_constant_override("v_separation", 4)
+	column.add_child(entries)
+	for entry in [
+		"Bicycle · rider partner", "Car · e-hailing driver",
+		"Person · passenger", "Utensils · restaurant",
+		"Store · merchant", "Parcel · logistics booking",
+		"Pin · pickup", "Flag · drop-off",
+		"Warehouse · hub", "Truck · express booking",
+	]:
+		var label := _label(entry, 10, "#d7e3e9")
+		label.custom_minimum_size = Vector2(108, 34)
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		entries.add_child(label)
+	_layout_map_legend()
+
+func _toggle_map_legend() -> void:
+	map_legend_open = not map_legend_open
+	if is_instance_valid(map_legend_button):
+		map_legend_button.tooltip_text = "Hide map marker legend" if map_legend_open else "Show the map marker legend"
+		_set_button_variant(map_legend_button, "action" if map_legend_open else "quiet")
+	_update_map_legend_visibility()
+	_layout_map_legend()
+
+func _update_map_legend_visibility() -> void:
+	if is_instance_valid(map_legend_panel):
+		map_legend_panel.visible = map_legend_open and game_session_started and not main_menu_active and selected_tab == "Map"
+
+func _layout_map_legend() -> void:
+	if not is_instance_valid(map_legend_panel):
+		return
+	var panel_width := minf(252.0, maxf(176.0, viewport_size.x - safe_insets.x - safe_insets.z - 24.0))
+	var panel_height := minf(246.0, maxf(188.0, viewport_size.y - safe_insets.y - safe_insets.w - 32.0))
+	var is_landscape := viewport_size.x > viewport_size.y
+	var x := safe_insets.x + (160.0 if is_landscape else 12.0)
+	if x + panel_width > viewport_size.x - safe_insets.z - 8.0:
+		x = viewport_size.x - safe_insets.z - panel_width - 8.0
+	var y := maxf(safe_insets.y + 12.0, (viewport_size.y - panel_height) * 0.5)
+	map_legend_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	map_legend_panel.offset_left = x
+	map_legend_panel.offset_top = y
+	map_legend_panel.offset_right = x + panel_width
+	map_legend_panel.offset_bottom = y + panel_height
 
 func _label(text: String, size: int, color: String) -> Label:
 	var label := Label.new()
@@ -856,10 +931,12 @@ func _layout_ui() -> void:
 	map_controls.offset_left = safe_left + 12 * ui_layout_scale if controls_on_left else -safe_right - 78 * ui_layout_scale
 	map_controls.offset_right = safe_left + 150 * ui_layout_scale if controls_on_left else -safe_right - 12 * ui_layout_scale
 	map_controls.offset_top = safe_top + 142 * ui_layout_scale
-	map_controls.offset_bottom = safe_top + 302 * ui_layout_scale
+	map_controls.offset_bottom = safe_top + (302 if is_landscape else 460) * ui_layout_scale
 	for index in range(map_controls.get_child_count()):
 		var map_control: Button = map_controls.get_child(index)
 		map_control.custom_minimum_size = Vector2(maxf(58.0, 64.0 * ui_layout_scale), maxf(44.0, ThemeService.control_height("compact") * ui_layout_scale))
+	_layout_map_legend()
+	_update_map_legend_visibility()
 
 	bottom_nav.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	if is_desktop:
@@ -932,6 +1009,9 @@ func _layout_ui() -> void:
 	# is deliberately allowed to grow for readable booking details, but must not
 	# make the four primary destinations visually or physically inaccessible.
 	if not main_menu_active and not is_instance_valid(save_overlay) and not is_instance_valid(new_game_confirmation) and not is_instance_valid(return_menu_confirmation):
+		bottom_nav.move_to_front()
+	if map_legend_panel.visible:
+		map_legend_panel.move_to_front()
 		bottom_nav.move_to_front()
 	if viewport_changed:
 		call_deferred("_refresh")
@@ -1065,10 +1145,14 @@ func _sync_geographic_overlays() -> void:
 		var rider_uv: Vector2 = rider.get("position", Vector2.ZERO)
 		var rider_geo := geographic_service.uv_to_geo(rider_uv)
 		var rider_id := int(rider.get("id", -1))
+		var rider_busy := str(rider.get("status", "ready")) == "busy"
+		var assigned_order := _find_order(int(rider.get("order_id", -1))) if rider_busy else {}
+		var assigned_service := str(assigned_order.get("service_type", ""))
 		rider_features.append({
 			"id": "rider-%d" % rider_id,
-			"kind": "rider_active" if str(rider.get("status", "ready")) == "busy" else "rider_available",
-			"label": "R",
+			"kind": _partner_map_marker_kind(rider_busy, assigned_service),
+			"service": assigned_service,
+			"accessibleLabel": "%s partner %02d" % ["Active" if rider_busy else "Available", rider_id],
 			"status": str(rider.get("status", "ready")),
 			"selected": not selected.is_empty() and int(selected.get("rider", -1)) == rider_id,
 			"coordinates": [rider_geo.x, rider_geo.y],
@@ -1096,6 +1180,7 @@ func _sync_geographic_overlays() -> void:
 				route_features.append({
 					"id": "booking-%d-%s" % [int(selected["id"]), str(phase_info["id"])],
 					"phase": str(phase_info["id"]),
+					"service": str(selected.get("service_type", "parcel_logistics")),
 					"selected": true,
 					"coordinates": coordinates,
 				})
@@ -1111,7 +1196,7 @@ func _sync_geographic_overlays() -> void:
 		marker_features.append({
 			"id": "booking-%d-destination" % order_id,
 			"kind": "destination" if active else _booking_marker_kind(str(order.get("service_type", "parcel_logistics"))),
-			"label": "D" if active else IDMServicePricing.marker(str(order.get("service_type", "parcel_logistics"))),
+			"accessibleLabel": "Drop-off for booking %03d" % order_id if active else "%s booking %03d" % [IDMServicePricing.short_label(str(order.get("service_type", "parcel_logistics"))), order_id],
 			"service": str(order.get("service_type", "parcel_logistics")),
 			"status": str(order.get("status", "Waiting")),
 			"selected": is_selected,
@@ -1124,7 +1209,7 @@ func _sync_geographic_overlays() -> void:
 			marker_features.append({
 				"id": "booking-%d-pickup" % order_id,
 				"kind": "pickup",
-				"label": "P",
+				"accessibleLabel": "Pickup for booking %03d" % order_id,
 				"status": str(order.get("status", "Waiting")),
 				"selected": true,
 				"bookingId": order_id,
@@ -1142,6 +1227,14 @@ func _booking_marker_kind(service_id: String) -> String:
 		"e_hailing": return "booking_passenger"
 		"express_logistics": return "booking_express"
 		_: return "booking_parcel"
+
+func _partner_map_marker_kind(is_busy: bool, service_id: String) -> String:
+	if not is_busy:
+		return "rider_available"
+	match service_id:
+		"e_hailing": return "driver_car"
+		"express_logistics": return "express_truck"
+		_: return "rider_active"
 
 func _sync_map_input_blockers() -> void:
 	browser_block_rects.clear()
@@ -1904,6 +1997,7 @@ func _follow_selected_rider() -> void:
 func _refresh() -> void:
 	if not is_instance_valid(order_list):
 		return
+	_update_map_legend_visibility()
 	if is_instance_valid(brand_label):
 		brand_label.text = player_company_name
 		brand_label.tooltip_text = player_company_name
