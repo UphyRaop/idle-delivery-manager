@@ -91,6 +91,7 @@ var waiting_bookings_page: PanelContainer
 var waiting_bookings_page_margin: MarginContainer
 var waiting_bookings_page_list: VBoxContainer
 var waiting_bookings_page_open := false
+var waiting_bookings_refresh_queued := false
 var sheet_handle_row: Control
 var sheet_header_row: Control
 var sheet_subtabs: HBoxContainer
@@ -884,6 +885,17 @@ func _refresh_waiting_bookings_page() -> void:
 		dispatch.disabled = candidates.is_empty()
 		_set_button_variant(dispatch, "action")
 		actions.add_child(dispatch)
+
+func _schedule_waiting_bookings_refresh() -> void:
+	if waiting_bookings_refresh_queued or not waiting_bookings_page_open:
+		return
+	waiting_bookings_refresh_queued = true
+	call_deferred("_refresh_waiting_bookings_page_deferred")
+
+func _refresh_waiting_bookings_page_deferred() -> void:
+	waiting_bookings_refresh_queued = false
+	if waiting_bookings_page_open:
+		_refresh_waiting_bookings_page()
 
 func _open_waiting_bookings_page() -> void:
 	if not is_instance_valid(waiting_bookings_page):
@@ -2305,7 +2317,7 @@ func _dispatch(order_id: int, requested_partner_id: int = -1) -> void:
 				break
 		if not found:
 			status_label.text = "Selected partner is no longer eligible or available."
-			_refresh_waiting_bookings_page()
+			_schedule_waiting_bookings_refresh()
 			return
 	var available := -1
 	for index in riders.size():
@@ -2631,7 +2643,7 @@ func _refresh() -> void:
 	rider_summary = null
 	finance_summary = null
 	if waiting_bookings_page_open:
-		_refresh_waiting_bookings_page()
+		_schedule_waiting_bookings_refresh()
 	if is_instance_valid(sheet_header_label):
 		sheet_header_label.text = _sheet_title()
 	if is_instance_valid(map_view):

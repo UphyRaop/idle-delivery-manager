@@ -118,10 +118,15 @@ func _run() -> void:
 	if is_instance_valid(dispatch_action):
 		dispatch_action.pressed.emit()
 	await process_frame
+	await process_frame
 	var dispatched_order: Dictionary = game.call("_find_order", order_id)
 	var dispatched_partner: Dictionary = game.call("_find_rider", int(dispatched_order.get("rider", -1)))
 	_check(str(dispatched_order.get("status", "")).begins_with("On route") and int(dispatched_partner.get("id", -1)) == recommended_id, "Waiting Bookings dispatches to the recommended partner through shared gameplay logic")
 	_check(str(dispatched_partner.get("status", "")) == "busy" and int(dispatched_partner.get("order_id", -1)) == order_id, "dispatch marks partner busy with exactly one active booking")
+	rows = game.get("waiting_bookings_page_list") as VBoxContainer
+	var dispatched_row := rows.find_child("DispatchBooking%d" % order_id, true, false)
+	var queue_refreshed := not is_instance_valid(dispatched_row) and (int(game.call("_waiting_count")) > 0 or rows.get_child_count() == 1 and rows.get_child(0) is Label)
+	_check(queue_refreshed, "dispatched row is removed after the callback and empty state appears when needed")
 	game.call("_close_waiting_bookings_page")
 	await process_frame
 
