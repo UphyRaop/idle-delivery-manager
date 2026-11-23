@@ -7,11 +7,15 @@ const WEB_SAVE_PATH_KEY := "idm_active_save_path"
 const WEB_SAVE_CATALOG_KEY := "idm_save_catalog_v1"
 const SAVE_CATALOG_PATH := "user://idm_save_catalog.json"
 const SAVE_SESSION_PREFIX := "user://delivery_ops_session_"
+const MANUAL_SLOT_PREFIX := "user://delivery_ops_manual_slot_"
+const MANUAL_SLOT_STORAGE_PREFIX := "idm_manual_slot_"
+const MANUAL_SLOT_COUNT := 3
 var save_path := LEGACY_SAVE_PATH
 var save_profiles: Array[Dictionary] = []
 var save_recovery_required := false
 var recovery_overlay: ColorRect
 var save_overlay: ColorRect
+var overwrite_confirmation_overlay: ColorRect
 var new_game_confirmation: ColorRect
 var company_name_input: LineEdit
 var company_service_option: OptionButton
@@ -159,6 +163,18 @@ func _load_active_save_path() -> void:
 func _is_valid_save_path(path: String) -> bool:
 	return path == LEGACY_SAVE_PATH or (path.begins_with(SAVE_SESSION_PREFIX) and path.ends_with(".json"))
 
+func _manual_slot_path(slot: int) -> String:
+	return "%s%d.json" % [MANUAL_SLOT_PREFIX, slot]
+
+func _manual_slot_id_for_path(path: String) -> int:
+	if not path.begins_with(MANUAL_SLOT_PREFIX) or not path.ends_with(".json"):
+		return 0
+	var suffix := path.trim_prefix(MANUAL_SLOT_PREFIX).trim_suffix(".json")
+	return int(suffix) if suffix.is_valid_int() and int(suffix) >= 1 and int(suffix) <= MANUAL_SLOT_COUNT else 0
+
+func _is_manual_slot_path(path: String) -> bool:
+	return _manual_slot_id_for_path(path) > 0
+
 func _save_mirror_key(path: String) -> String:
 	return "idm_save_" + path.sha256_text()
 
@@ -213,6 +229,14 @@ func _register_current_save_profile() -> void:
 			"map_space": "legacy_normalized" if legacy_map_mode else "kl_selangor_web_mercator_uv",
 			"created_at": int(Time.get_unix_time_from_system()),
 		})
+	var active_payload := _save_payload_for_path(save_path)
+	if not active_payload.is_empty():
+		for index in save_profiles.size():
+			if str(save_profiles[index].get("path", "")) == save_path:
+				save_profiles[index]["saved_at"] = int(active_payload.get("saved_at", 0))
+				save_profiles[index]["company_name"] = str(active_payload.get("company", {}).get("name", player_company_name))
+				save_profiles[index]["location"] = str(active_payload.get("company", {}).get("starting_location", player_starting_location))
+				break
 	_persist_save_catalog()
 
 func _load_map_texture() -> void:
@@ -448,6 +472,14 @@ func _latest_valid_save_path() -> String:
 		if timestamp >= best_timestamp:
 			best_timestamp = timestamp
 			best_path = path
+	for slot in range(1, MANUAL_SLOT_COUNT + 1):
+		var manual_payload := _manual_slot_payload(slot)
+		if manual_payload.is_empty():
+			continue
+		var manual_timestamp := int(manual_payload.get("saved_at", 0))
+		if manual_timestamp >= best_timestamp:
+			best_timestamp = manual_timestamp
+			best_path = _manual_slot_path(slot)
 	return best_path
 
 func _save_payload_for_path(path: String) -> Dictionary:
@@ -2000,10 +2032,18 @@ func _refresh() -> void:
 				var main_menu_button := _button("Main Menu", _return_to_main_menu)
 				main_menu_button.custom_minimum_size.y = _ui_size(ThemeService.control_height("standard"))
 				order_list.add_child(main_menu_button)
-				order_list.add_child(_label("CURRENT SAVE", 11, "#91a8ba"))
-				var profile_label := _label("Legacy map · preserved" if legacy_map_mode else "Geographic map · KL / Selangor", 14, "#f1f6fa")
+				var current_payload := _save_payload_for_path(save_path)
+				order_list.add_child(_label("AUTOSAVE · CURRENT GAME", 11, "#91a8ba"))
+				var profile_label := _label("%s · %s" % [player_company_name, "Legacy fictional map" if legacy_map_mode else player_starting_location], 14, "#f1f6fa")
 				profile_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 				order_list.add_child(profile_label)
+				var current_metadata := _label(_save_metadata_text(current_payload), 11, "#a8bac8")
+				current_metadata.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				order_list.add_child(current_metadata)
+				var manual_save_button := _button("Save Game", _show_manual_save_slots)
+				manual_save_button.custom_minimum_size.y = _ui_size(ThemeService.control_height("standard"))
+				_set_button_variant(manual_save_button, "action")
+				order_list.add_child(manual_save_button)
 				var continue_button := _button("Continue Game", _continue_game)
 				continue_button.custom_minimum_size.y = _ui_size(ThemeService.control_height("standard"))
 				_set_button_variant(continue_button, "action")
@@ -2068,6 +2108,10 @@ func _continue_game() -> void:
 	if main_menu_active:
 		var latest_path := _latest_valid_save_path()
 		if latest_path.is_empty():
+			return
+		var manual_slot := _manual_slot_id_for_path(latest_path)
+		if manual_slot > 0:
+			_load_manual_slot(manual_slot)
 			return
 		if latest_path != save_path:
 			_load_save_profile(latest_path)
@@ -2334,6 +2378,10 @@ func _show_load_game() -> void:
 	var profile_list := VBoxContainer.new()
 	profile_list.add_theme_constant_override("separation", 6)
 	scroll.add_child(profile_list)
+	profile_list.add_child(_label("MANUAL SAVES", 11, "#91a8ba"))
+	for slot in range(1, MANUAL_SLOT_COUNT + 1):
+		profile_list.add_child(_manual_slot_card(slot, "load"))
+	profile_list.add_child(_label("AUTOSAVE PROFILES", 11, "#91a8ba"))
 	var ordered_profiles := save_profiles.duplicate()
 	ordered_profiles.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var a_payload := _save_payload_for_path(str(a.get("path", "")))
@@ -2351,18 +2399,300 @@ func _show_load_game() -> void:
 		var is_legacy := str(profile.get("map_space", "legacy_normalized")) != "kl_selangor_web_mercator_uv"
 		var valid_profile := not _save_payload_for_path(path).is_empty()
 		var profile_state := "Unavailable · invalid save kept unchanged" if not valid_profile else "Current game · preserved" if path == save_path else "Tap to load"
-		var label := ("Legacy save · fictional map\n%s" % profile_state) if is_legacy else ("KL / Selangor · geographic game\n%s" % profile_state)
+		var payload := _save_payload_for_path(path)
+		var company_data: Dictionary = payload.get("company", {})
+		var company_display := str(company_data.get("name", profile.get("company_name", "Existing company")))
+		var location_display := str(company_data.get("starting_location", profile.get("location", "Legacy location")))
+		var label := "%s\n%s · %s\n%s" % [company_display, "Legacy fictional map" if is_legacy else "Geographic map", location_display, profile_state]
 		var target_path := path
 		var load_button := _button(label, func(): _load_save_profile(target_path))
-		load_button.custom_minimum_size.y = 58
+		load_button.custom_minimum_size.y = 72
 		load_button.disabled = path == save_path or not valid_profile
 		profile_list.add_child(load_button)
 	if visible_count == 0:
-		profile_list.add_child(_label("No saved games are available yet.", 13, "#a8bac8"))
-	scroll.custom_minimum_size.y = minf(minf(390.0, maxf(54.0, float(visible_count) * 64.0)), maxf(54.0, viewport_size.y - 210.0))
+		profile_list.add_child(_label("No autosave profiles are available yet.", 13, "#a8bac8"))
+	scroll.custom_minimum_size.y = minf(390.0, maxf(120.0, viewport_size.y - 260.0))
 	var close_button := _button("Back to Main Menu" if main_menu_active else "Return to Game", _close_save_overlay)
 	close_button.custom_minimum_size.y = 46
 	column.add_child(close_button)
+
+func _show_manual_save_slots() -> void:
+	if not game_session_started:
+		return
+	_save_game()
+	_register_current_save_profile()
+	_close_save_overlay()
+	save_overlay = ColorRect.new()
+	save_overlay.color = Color(0.008, 0.025, 0.04, 0.84)
+	save_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	save_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	save_overlay.name = "ManualSaveOverlay"
+	add_child(save_overlay)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	save_overlay.add_child(center)
+	var card := PanelContainer.new()
+	card.custom_minimum_size = Vector2(minf(360.0, viewport_size.x - 32.0), 0)
+	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
+	center.add_child(card)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 8)
+	card.add_child(column)
+	column.add_child(_label("SAVE GAME", 19, "#f1f6fa"))
+	var description := _label("Manual slots are separate from your autosave. Existing slots require confirmation before replacement.", 12, "#a8bac8")
+	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(description)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.custom_minimum_size.y = minf(330.0, maxf(120.0, viewport_size.y - 310.0))
+	column.add_child(scroll)
+	var slots := VBoxContainer.new()
+	slots.add_theme_constant_override("separation", 6)
+	scroll.add_child(slots)
+	for slot in range(1, MANUAL_SLOT_COUNT + 1):
+		slots.add_child(_manual_slot_card(slot, "save"))
+	var close_button := _button("Return to Game", _close_save_overlay)
+	close_button.custom_minimum_size.y = 46
+	column.add_child(close_button)
+
+func _manual_slot_card(slot: int, mode: String) -> Control:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_theme_stylebox_override("panel", _panel_style("#152e3e", 13))
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 3)
+	panel.add_child(column)
+	var payload := _manual_slot_payload(slot)
+	var slot_exists := _manual_slot_exists(slot)
+	column.add_child(_label("SLOT %d · %s" % [slot, "SAVED GAME" if not payload.is_empty() else "EMPTY" if not slot_exists else "UNAVAILABLE"], 12, "#45d9ec"))
+	var details := _save_metadata_text(payload) if not payload.is_empty() else "No save in this slot." if not slot_exists else "This saved file cannot be read; it has been kept unchanged."
+	var detail_label := _label(details, 11, "#a8bac8")
+	detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(detail_label)
+	var action := _button("Save to Slot %d" % slot if mode == "save" else "Load Slot %d" % slot, func(): _save_manual_slot(slot) if mode == "save" else _load_manual_slot(slot))
+	action.custom_minimum_size.y = 46
+	action.disabled = mode == "load" and payload.is_empty()
+	_set_button_variant(action, "action" if mode == "save" or not payload.is_empty() else "quiet")
+	column.add_child(action)
+	return panel
+
+func _manual_slot_exists(slot: int) -> bool:
+	var mirrored: Variant = _web_storage_get("%s%d" % [MANUAL_SLOT_STORAGE_PREFIX, slot])
+	return (mirrored is String and not mirrored.is_empty()) or FileAccess.file_exists(_manual_slot_path(slot)) or FileAccess.file_exists(_manual_slot_path(slot) + ".bak")
+
+func _manual_slot_payload(slot: int) -> Dictionary:
+	if slot < 1 or slot > MANUAL_SLOT_COUNT:
+		return {}
+	var mirrored: Variant = _web_storage_get("%s%d" % [MANUAL_SLOT_STORAGE_PREFIX, slot])
+	if mirrored is String and not mirrored.is_empty():
+		var parsed_mirror := JSON.new()
+		if parsed_mirror.parse(mirrored) == OK and parsed_mirror.data is Dictionary:
+			var envelope: Dictionary = parsed_mirror.data
+			var mirrored_payload: Variant = envelope.get("data", {})
+			if int(envelope.get("slot", 0)) == slot and mirrored_payload is Dictionary and _is_valid_game_save_payload(mirrored_payload):
+				return mirrored_payload
+	for path in [_manual_slot_path(slot), _manual_slot_path(slot) + ".bak"]:
+		if not FileAccess.file_exists(path):
+			continue
+		var file := FileAccess.open(path, FileAccess.READ)
+		if file == null:
+			continue
+		var parsed_file := JSON.new()
+		if parsed_file.parse(file.get_as_text()) == OK and parsed_file.data is Dictionary and _is_valid_game_save_payload(parsed_file.data):
+			return parsed_file.data
+	return {}
+
+func _is_valid_game_save_payload(payload: Dictionary) -> bool:
+	return int(payload.get("version", 0)) == 1 and payload.get("riders", []) is Array and not (payload.get("riders", []) as Array).is_empty() and payload.get("orders", []) is Array and typeof(payload.get("cash", null)) in [TYPE_INT, TYPE_FLOAT] and is_finite(float(payload.get("cash", 0.0)))
+
+func _save_manual_slot(slot: int, overwrite_confirmed: bool = false) -> bool:
+	if slot < 1 or slot > MANUAL_SLOT_COUNT or save_recovery_required or not game_session_started:
+		return false
+	if _manual_slot_exists(slot) and not overwrite_confirmed:
+		_confirm_manual_slot_overwrite(slot)
+		return false
+	var payload := _build_save_payload()
+	var path := _manual_slot_path(slot)
+	var temp_path := path + ".tmp"
+	var file := FileAccess.open(temp_path, FileAccess.WRITE)
+	if file == null:
+		status_label.text = "Could not save Slot %d. Your autosave remains unchanged." % slot
+		_refresh()
+		return false
+	file.store_string(JSON.stringify(payload))
+	file.flush()
+	file.close()
+	var verification := JSON.new()
+	var temp_file := FileAccess.open(temp_path, FileAccess.READ)
+	if temp_file == null or verification.parse(temp_file.get_as_text()) != OK or not verification.data is Dictionary or not _is_valid_game_save_payload(verification.data):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+		status_label.text = "Slot %d did not verify. Your earlier saves remain unchanged." % slot
+		_refresh()
+		return false
+	if FileAccess.file_exists(path):
+		var backup_path := path + ".bak"
+		if FileAccess.file_exists(backup_path):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(backup_path))
+		if DirAccess.copy_absolute(ProjectSettings.globalize_path(path), ProjectSettings.globalize_path(backup_path)) != OK:
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+			status_label.text = "Could not protect the previous Slot %d save; overwrite was cancelled." % slot
+			_refresh()
+			return false
+	if DirAccess.rename_absolute(ProjectSettings.globalize_path(temp_path), ProjectSettings.globalize_path(path)) != OK:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+		status_label.text = "Could not finish saving Slot %d. The earlier slot is preserved." % slot
+		_refresh()
+		return false
+	var envelope := JSON.stringify({"slot": slot, "data": payload})
+	_web_storage_set("%s%d" % [MANUAL_SLOT_STORAGE_PREFIX, slot], envelope)
+	status_label.text = "Saved Slot %d · %s" % [slot, _format_saved_timestamp(int(payload.get("saved_at", 0)))]
+	_close_save_overlay()
+	_refresh()
+	return true
+
+func _confirm_manual_slot_overwrite(slot: int) -> void:
+	if is_instance_valid(overwrite_confirmation_overlay):
+		overwrite_confirmation_overlay.queue_free()
+	overwrite_confirmation_overlay = ColorRect.new()
+	overwrite_confirmation_overlay.color = Color(0.008, 0.025, 0.04, 0.88)
+	overwrite_confirmation_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overwrite_confirmation_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overwrite_confirmation_overlay.name = "ManualSaveOverwriteConfirmation"
+	if is_instance_valid(save_overlay):
+		save_overlay.add_child(overwrite_confirmation_overlay)
+	else:
+		add_child(overwrite_confirmation_overlay)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overwrite_confirmation_overlay.add_child(center)
+	var card := PanelContainer.new()
+	card.custom_minimum_size = Vector2(minf(340.0, viewport_size.x - 32.0), 0)
+	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
+	center.add_child(card)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	card.add_child(column)
+	column.add_child(_label("OVERWRITE SLOT %d?" % slot, 18, "#f1f6fa"))
+	var warning := _label("The existing manual save will be backed up before replacement. Your separate autosave will not be changed.", 13, "#a8bac8")
+	warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(warning)
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 6)
+	column.add_child(actions)
+	var cancel := _button("Cancel", _cancel_manual_slot_overwrite)
+	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel.custom_minimum_size.y = 46
+	actions.add_child(cancel)
+	var overwrite := _button("Overwrite Slot %d" % slot, func(): _save_manual_slot(slot, true))
+	overwrite.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	overwrite.custom_minimum_size.y = 46
+	_set_button_variant(overwrite, "action")
+	actions.add_child(overwrite)
+
+func _cancel_manual_slot_overwrite() -> void:
+	if is_instance_valid(overwrite_confirmation_overlay):
+		overwrite_confirmation_overlay.queue_free()
+	overwrite_confirmation_overlay = null
+
+func _load_manual_slot(slot: int) -> void:
+	var payload := _manual_slot_payload(slot)
+	if payload.is_empty():
+		status_label.text = "Slot %d is empty or unavailable. Existing data was kept unchanged." % slot
+		_refresh()
+		return
+	if game_session_started:
+		_save_game()
+		_register_current_save_profile()
+	var previous_path := save_path
+	save_recovery_required = false
+	_load_game(payload)
+	if save_recovery_required:
+		save_path = previous_path
+		_set_active_save_path(previous_path)
+		save_recovery_required = false
+		_load_game()
+		status_label.text = "Slot %d could not be loaded. Your previous game and the slot remain unchanged." % slot
+		_refresh()
+		return
+	var session_path := "%s%d_%06d.json" % [SAVE_SESSION_PREFIX, int(Time.get_unix_time_from_system()), randi_range(0, 999999)]
+	while FileAccess.file_exists(session_path) or _web_save_mirror_exists(session_path):
+		session_path = "%s%d_%06d.json" % [SAVE_SESSION_PREFIX, int(Time.get_unix_time_from_system()), randi_range(0, 999999)]
+	save_path = session_path
+	_set_active_save_path(save_path)
+	main_menu_active = false
+	game_session_started = true
+	paused = false
+	simulation_clock.set_paused(false)
+	_set_map_dom_visible(true)
+	map_view.visible = true
+	hud.visible = true
+	sim_controls.visible = true
+	map_controls.visible = true
+	sheet.visible = true
+	bottom_nav.visible = true
+	if is_instance_valid(menu_overlay):
+		menu_overlay.queue_free()
+	menu_overlay = null
+	selected_tab = "Map"
+	selected_subtab = "City" if not world_map else "World"
+	_save_game()
+	_register_current_save_profile()
+	_close_save_overlay()
+	status_label.text = "Loaded Manual Slot %d · original slot kept unchanged" % slot
+	_refresh()
+
+func _game_date_text(seconds: float) -> String:
+	var whole_seconds := maxi(0, int(floor(seconds)))
+	var day := whole_seconds / 86400 + 1
+	var hour := (whole_seconds / 3600) % 24
+	var minute := (whole_seconds / 60) % 60
+	return "Game Day %02d · %02d:%02d" % [day, hour, minute]
+
+func _format_saved_timestamp(timestamp: int) -> String:
+	if timestamp <= 0:
+		return "Not saved yet"
+	var date := Time.get_datetime_dict_from_unix_time(timestamp)
+	return "%04d-%02d-%02d %02d:%02d UTC" % [date.year, date.month, date.day, date.hour, date.minute]
+
+func _save_metadata_text(payload: Dictionary) -> String:
+	if payload.is_empty():
+		return "No valid save details available."
+	var company: Dictionary = payload.get("company", {})
+	var company_name := str(company.get("name", LEGACY_COMPANY_NAME))
+	var location := str(company.get("starting_location", "Legacy location" if str(payload.get("map_space", "")) != "kl_selangor_web_mercator_uv" else "Kuala Lumpur"))
+	var game_date := _game_date_text(float(payload.get("elapsed", 0.0)))
+	var saved := _format_saved_timestamp(int(payload.get("saved_at", 0)))
+	return "%s · %s · %s\nSaved %s" % [company_name, game_date, location, saved]
+
+func _build_save_payload() -> Dictionary:
+	var data := {
+		"version": 1,
+		"saved_at": int(Time.get_unix_time_from_system()),
+		"map_space": "kl_selangor_web_mercator_uv" if geographic_map_available and not legacy_map_mode else "legacy_normalized",
+		"map_bounds_wsen": [IDMGeographicService.WEST, IDMGeographicService.SOUTH, IDMGeographicService.EAST, IDMGeographicService.NORTH] if geographic_map_available and not legacy_map_mode else [],
+		"cash": cash,
+		"revenue_total": revenue_total,
+		"cost_total": cost_total,
+		"delivered": delivered,
+		"riders": riders,
+		"orders": orders,
+		"next_order_id": next_order_id,
+		"next_rider_id": next_rider_id,
+		"elapsed": elapsed,
+		"speed": speed,
+		"company": {
+			"id": "company_%s" % player_company_service if not player_company_service.is_empty() else "company_legacy",
+			"name": player_company_name,
+			"service_id": player_company_service,
+			"difficulty": player_difficulty,
+			"starting_location": player_starting_location,
+		},
+	}
+	if _maplibre_active():
+		var camera := _browser_camera_snapshot()
+		if not camera.is_empty():
+			data["map_camera"] = camera
+	return data
 
 func _web_save_mirror_exists(path: String) -> bool:
 	var value: Variant = _web_storage_get(_save_mirror_key(path))
@@ -2424,6 +2754,9 @@ func _close_save_overlay() -> void:
 	if is_instance_valid(save_overlay):
 		save_overlay.queue_free()
 	save_overlay = null
+	if is_instance_valid(overwrite_confirmation_overlay):
+		overwrite_confirmation_overlay.queue_free()
+	overwrite_confirmation_overlay = null
 
 func _ready_count() -> int:
 	var count := 0
@@ -2572,33 +2905,7 @@ func _draw_fictional_map_background(size: Vector2) -> void:
 func _save_game() -> void:
 	if save_recovery_required:
 		return
-	var data := {
-		"version": 1,
-		"saved_at": int(Time.get_unix_time_from_system()),
-		"map_space": "kl_selangor_web_mercator_uv" if geographic_map_available and not legacy_map_mode else "legacy_normalized",
-		"map_bounds_wsen": [IDMGeographicService.WEST, IDMGeographicService.SOUTH, IDMGeographicService.EAST, IDMGeographicService.NORTH] if geographic_map_available and not legacy_map_mode else [],
-		"cash": cash,
-		"revenue_total": revenue_total,
-		"cost_total": cost_total,
-		"delivered": delivered,
-		"riders": riders,
-		"orders": orders,
-		"next_order_id": next_order_id,
-		"next_rider_id": next_rider_id,
-		"elapsed": elapsed,
-		"speed": speed,
-		"company": {
-			"id": "company_%s" % player_company_service if not player_company_service.is_empty() else "company_legacy",
-			"name": player_company_name,
-			"service_id": player_company_service,
-			"difficulty": player_difficulty,
-			"starting_location": player_starting_location,
-		},
-	}
-	if _maplibre_active():
-		var camera := _browser_camera_snapshot()
-		if not camera.is_empty():
-			data["map_camera"] = camera
+	var data := _build_save_payload()
 	var serialized := JSON.stringify(data)
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
@@ -2622,14 +2929,14 @@ func _web_storage_get(key: String) -> Variant:
 		return null
 	return bridge.call("eval", "localStorage.getItem(" + JSON.stringify(key) + ")", true)
 
-func _web_storage_set(key: String, value: String) -> void:
+func _web_storage_set(key: String, value: String) -> bool:
 	if not Engine.has_singleton("JavaScriptBridge"):
-		return
+		return false
 	var bridge: Object = Engine.get_singleton("JavaScriptBridge")
 	if bridge == null:
-		return
+		return false
 	var code := "try { localStorage.setItem(" + JSON.stringify(key) + ", " + JSON.stringify(value) + "); true; } catch (error) { false; }"
-	bridge.call("eval", code, true)
+	return bridge.call("eval", code, true) == true
 
 func _web_save_mirror() -> Dictionary:
 	var mirrored: Variant = _web_storage_get(_save_mirror_key(save_path))
@@ -2648,13 +2955,13 @@ func _web_save_mirror() -> Dictionary:
 		return {}
 	return data
 
-func _load_game() -> void:
+func _load_game(override_payload: Dictionary = {}) -> void:
 	selected_order = -1
 	sheet_expanded = false
 	maplibre_initialized = false
 	browser_map_state.clear()
 	pending_map_camera.clear()
-	var data := _web_save_mirror()
+	var data := override_payload.duplicate(true) if not override_payload.is_empty() else _web_save_mirror()
 	if data.is_empty():
 		if not FileAccess.file_exists(save_path):
 			_new_game(false)
