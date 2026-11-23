@@ -468,7 +468,8 @@ func _set_map_dom_visible(visible: bool) -> void:
 		return
 	var bridge: Object = Engine.get_singleton("JavaScriptBridge")
 	if bridge != null:
-		bridge.call("eval", "(()=>{const e=document.getElementById('idm-map-root');if(e)e.style.visibility=%s;})()" % JSON.stringify("visible" if visible else "hidden"), true)
+		var visibility := "visible" if visible else "hidden"
+		bridge.call("eval", "(()=>{window.IDM_MAP_VISIBLE=%s;const e=document.getElementById('idm-map-root');if(e)e.style.visibility=%s;const a=document.getElementById('idm-map-attribution');if(a)a.style.visibility=%s;})()" % [JSON.stringify(visible), JSON.stringify(visibility), JSON.stringify(visibility)], true)
 
 func _latest_valid_save_path() -> String:
 	var candidates: Array[String] = []
@@ -1359,6 +1360,9 @@ func _browser_camera_snapshot() -> Dictionary:
 
 func _update_browser_map(delta: float) -> void:
 	if not Engine.has_singleton("JavaScriptBridge"):
+		return
+	if selected_tab != "Map" or waiting_bookings_page_open:
+		_maplibre_call("window.IDMMap.setVisible(false)")
 		return
 	var ready := _maplibre_ready()
 	if not ready:

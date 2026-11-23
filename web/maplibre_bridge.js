@@ -36,6 +36,8 @@
 
   let map = null;
   let mapRoot = null;
+  let attributionControlElement = null;
+  let mapVisibilityRequested = false;
   let ready = false;
   let styleReady = false;
   let themeMode = "dark";
@@ -63,6 +65,7 @@
   let iconInstallGeneration = 0;
 
   function ensureRoot() {
+    if (typeof window.IDM_MAP_VISIBLE === "boolean") mapVisibilityRequested = window.IDM_MAP_VISIBLE;
     let root = document.getElementById(MAP_ROOT_ID);
     if (!root) {
       root = document.createElement("div");
@@ -78,6 +81,7 @@
       }
     }
     mapRoot = root;
+    root.style.visibility = mapVisibilityRequested ? "visible" : "hidden";
     return root;
   }
 
@@ -136,12 +140,13 @@
       });
       const attributionControl = new window.maplibregl.AttributionControl({ compact: true });
       map.addControl(attributionControl, "top-left");
-      const attributionElement = root.querySelector(".maplibregl-ctrl-attrib");
-      if (!attributionElement) throw new Error("MapLibre attribution control was not created.");
-      attributionElement.id = "idm-map-attribution";
+      attributionControlElement = root.querySelector(".maplibregl-ctrl-attrib");
+      if (!attributionControlElement) throw new Error("MapLibre attribution control was not created.");
+      attributionControlElement.id = "idm-map-attribution";
       // Escape the basemap's z-index layer so the credit button is visible and
       // natively interactive above the full-screen Godot canvas.
-      document.body.appendChild(attributionElement);
+      attributionControlElement.style.display = mapVisibilityRequested ? "block" : "none";
+      document.body.appendChild(attributionControlElement);
       appliedTheme = themeMode;
 
       map.touchZoomRotate.disableRotation();
@@ -150,8 +155,8 @@
         // Compact mode is applied on MapLibre's first measured resize. Collapse
         // its initial credits panel after that pass, leaving a corner toggle.
         window.requestAnimationFrame(function () {
-          const attributionToggle = attributionElement.querySelector(".maplibregl-ctrl-attrib-button");
-          if (attributionToggle && attributionElement.classList.contains("maplibregl-compact-show")) attributionToggle.click();
+          const attributionToggle = attributionControlElement.querySelector(".maplibregl-ctrl-attrib-button");
+          if (attributionToggle && attributionControlElement.classList.contains("maplibregl-compact-show")) attributionToggle.click();
         });
         emit("idm-map-ready", getCamera());
       });
@@ -821,7 +826,12 @@
 
   function setVisible(visible) {
     const root = ensureRoot();
-    const display = visible ? "block" : "none";
+    mapVisibilityRequested = Boolean(visible);
+    window.IDM_MAP_VISIBLE = mapVisibilityRequested;
+    const display = mapVisibilityRequested ? "block" : "none";
+    root.style.visibility = mapVisibilityRequested ? "visible" : "hidden";
+    if (attributionControlElement) attributionControlElement.style.display = display;
+    if (attributionControlElement) attributionControlElement.style.visibility = display === "block" ? "visible" : "hidden";
     const changed = root.style.display !== display;
     if (!changed) return true;
     root.style.display = display;
