@@ -85,8 +85,6 @@ html, body {
   inset: 0;
   width: 100%;
   height: 100%;
-  height: 100dvh;
-  min-height: 100%;
   margin: 0;
   overflow: hidden;
   overscroll-behavior: none;
@@ -94,24 +92,22 @@ html, body {
   touch-action: none;
 }
 #canvas {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 1;
-  width: 100vw !important;
-  height: 100vh !important;
-  height: 100dvh !important;
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
   display: block;
   touch-action: none;
 }
-#canvas, #idm-map-root {
+html.idm-uses-visual-viewport #canvas,
+html.idm-uses-visual-viewport #idm-map-root {
+  position: fixed !important;
+  inset: auto !important;
   left: var(--idm-viewport-left, 0px) !important;
   top: var(--idm-viewport-top, 0px) !important;
-  right: auto !important;
-  bottom: auto !important;
   width: var(--idm-viewport-width, 100vw) !important;
-  height: var(--idm-viewport-height, 100dvh) !important;
+  height: var(--idm-viewport-height, 100vh) !important;
 }
 </style>
 '''
@@ -220,45 +216,52 @@ html = html.replace(default_status, branded_status, 1)
 viewport_sync = '''<script id="idm-visual-viewport">
 (() => {
   const root = document.documentElement;
-  const savedDescriptors = {
-    width: Object.getOwnPropertyDescriptor(window, 'innerWidth'),
-    height: Object.getOwnPropertyDescriptor(window, 'innerHeight'),
-  };
-  const layoutSize = { width: window.innerWidth, height: window.innerHeight };
+  let savedViewport = null;
   let frame = 0;
-  let active = false;
-  let lastRect = '';
   const schedule = (notify = false) => {
     if (frame) cancelAnimationFrame(frame);
     frame = requestAnimationFrame(() => {
       frame = 0;
       const viewport = window.visualViewport;
       if (!viewport || (viewport.scale && Math.abs(viewport.scale - 1) > 0.02)) return;
-      const rect = {
-        left: Math.round(viewport.offsetLeft || 0),
-        top: Math.round(viewport.offsetTop || 0),
-        width: Math.max(1, Math.round(viewport.width)),
-        height: Math.max(1, Math.round(viewport.height)),
-      };
-      const reduced = rect.width < layoutSize.width - 1 || rect.height < layoutSize.height - 1 || rect.left !== 0 || rect.top !== 0;
-      const signature = reduced ? `${rect.left}:${rect.top}:${rect.width}:${rect.height}` : 'layout';
-      const changed = signature !== lastRect;
+      const width = Math.max(1, Math.round(viewport.width));
+      const height = Math.max(1, Math.round(viewport.height));
+      const left = Math.round(viewport.offsetLeft || 0);
+      const top = Math.round(viewport.offsetTop || 0);
+      // Match OBT: only switch to a reduced visual viewport for a substantial
+      // obstruction (such as the software keyboard) or a shifted viewport.
+      const layoutHeight = savedViewport ? savedViewport.layoutHeight : window.innerHeight;
+      const reduced = height < layoutHeight - 80 || Math.abs(top) > 1 || Math.abs(left) > 1;
+      const signature = reduced ? `${left}:${top}:${width}:${height}` : 'layout';
+      const previousSignature = savedViewport ? savedViewport.signature : 'layout';
+      const changed = signature !== previousSignature;
       if (reduced) {
-        root.style.setProperty('--idm-viewport-left', `${rect.left}px`);
-        root.style.setProperty('--idm-viewport-top', `${rect.top}px`);
-        root.style.setProperty('--idm-viewport-width', `${rect.width}px`);
-        root.style.setProperty('--idm-viewport-height', `${rect.height}px`);
-        Object.defineProperty(window, 'innerWidth', { configurable: true, value: rect.width });
-        Object.defineProperty(window, 'innerHeight', { configurable: true, value: rect.height });
-      } else if (active) {
-        for (const [key, property] of [['innerWidth', savedDescriptors.width], ['innerHeight', savedDescriptors.height]]) {
+        if (!savedViewport) {
+          savedViewport = {
+            width: Object.getOwnPropertyDescriptor(window, 'innerWidth'),
+            height: Object.getOwnPropertyDescriptor(window, 'innerHeight'),
+            layoutHeight: window.innerHeight,
+            signature: '',
+          };
+        }
+        root.classList.add('idm-uses-visual-viewport');
+        root.style.setProperty('--idm-viewport-left', `${left}px`);
+        root.style.setProperty('--idm-viewport-top', `${top}px`);
+        root.style.setProperty('--idm-viewport-width', `${width}px`);
+        root.style.setProperty('--idm-viewport-height', `${height}px`);
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+        Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+        savedViewport.signature = signature;
+      } else if (savedViewport) {
+        const previous = savedViewport;
+        for (const [key, property] of [['innerWidth', previous.width], ['innerHeight', previous.height]]) {
           if (property) Object.defineProperty(window, key, property);
           else delete window[key];
         }
+        root.classList.remove('idm-uses-visual-viewport');
         for (const name of ['left', 'top', 'width', 'height']) root.style.removeProperty(`--idm-viewport-${name}`);
+        savedViewport = null;
       }
-      active = reduced;
-      lastRect = signature;
       if (changed || notify) window.dispatchEvent(new Event('resize'));
     });
   };
