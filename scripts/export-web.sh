@@ -105,6 +105,14 @@ html, body {
   display: block;
   touch-action: none;
 }
+#canvas, #idm-map-root {
+  left: var(--idm-viewport-left, 0px) !important;
+  top: var(--idm-viewport-top, 0px) !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: var(--idm-viewport-width, 100vw) !important;
+  height: var(--idm-viewport-height, 100dvh) !important;
+}
 </style>
 '''
 html = html.replace('</head>', mobile_css + '\n\t</head>')
@@ -209,9 +217,67 @@ branded_status = '''\t\t<div id="status" data-progress-mode="indeterminate" data
 if default_status not in html:
     raise SystemExit('Godot Web status markup changed; branded loader patch needs review.')
 html = html.replace(default_status, branded_status, 1)
+viewport_sync = '''<script id="idm-visual-viewport">
+(() => {
+  const root = document.documentElement;
+  const savedDescriptors = {
+    width: Object.getOwnPropertyDescriptor(window, 'innerWidth'),
+    height: Object.getOwnPropertyDescriptor(window, 'innerHeight'),
+  };
+  const layoutSize = { width: window.innerWidth, height: window.innerHeight };
+  let frame = 0;
+  let active = false;
+  let lastRect = '';
+  const schedule = (notify = false) => {
+    if (frame) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      const viewport = window.visualViewport;
+      if (!viewport || (viewport.scale && Math.abs(viewport.scale - 1) > 0.02)) return;
+      const rect = {
+        left: Math.round(viewport.offsetLeft || 0),
+        top: Math.round(viewport.offsetTop || 0),
+        width: Math.max(1, Math.round(viewport.width)),
+        height: Math.max(1, Math.round(viewport.height)),
+      };
+      const reduced = rect.width < layoutSize.width - 1 || rect.height < layoutSize.height - 1 || rect.left !== 0 || rect.top !== 0;
+      const signature = reduced ? `${rect.left}:${rect.top}:${rect.width}:${rect.height}` : 'layout';
+      const changed = signature !== lastRect;
+      if (reduced) {
+        root.style.setProperty('--idm-viewport-left', `${rect.left}px`);
+        root.style.setProperty('--idm-viewport-top', `${rect.top}px`);
+        root.style.setProperty('--idm-viewport-width', `${rect.width}px`);
+        root.style.setProperty('--idm-viewport-height', `${rect.height}px`);
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: rect.width });
+        Object.defineProperty(window, 'innerHeight', { configurable: true, value: rect.height });
+      } else if (active) {
+        for (const [key, property] of [['innerWidth', savedDescriptors.width], ['innerHeight', savedDescriptors.height]]) {
+          if (property) Object.defineProperty(window, key, property);
+          else delete window[key];
+        }
+        for (const name of ['left', 'top', 'width', 'height']) root.style.removeProperty(`--idm-viewport-${name}`);
+      }
+      active = reduced;
+      lastRect = signature;
+      if (changed || notify) window.dispatchEvent(new Event('resize'));
+    });
+  };
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => schedule(true), { passive: true });
+    window.visualViewport.addEventListener('scroll', () => schedule(true), { passive: true });
+  }
+  window.addEventListener('resize', () => schedule(), { passive: true });
+  window.addEventListener('orientationchange', () => schedule(true), { passive: true });
+  window.addEventListener('pageshow', () => schedule(true), { passive: true });
+  window.addEventListener('focus', () => schedule(true), { passive: true });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(true); }, { passive: true });
+  schedule(true);
+})();
+</script>'''
 html = html.replace(
     '<script src="index.js"></script>',
-    '<script src="./vendor/maplibre-gl.js"></script>\n'
+    viewport_sync + '\n'
+    '\t\t<script src="./vendor/maplibre-gl.js"></script>\n'
     '\t\t<script src="./map_overlay_layers.js"></script>\n'
     '\t\t<script src="./maplibre_bridge.js"></script>\n'
     '\t\t<script src="index.js"></script>',
@@ -309,6 +375,10 @@ required_loader_tokens = [
     'Rotate your device to portrait',
     'screen.orientation',
     'visualViewport',
+    'idm-visual-viewport',
+    'visibilitychange',
+    'offsetTop',
+    'safe-area-inset-bottom',
     'idm-phone-landscape',
 ]
 for token in required_loader_tokens:
