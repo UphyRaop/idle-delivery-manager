@@ -42,6 +42,9 @@ jobs:
       - name: Run architecture and migration regression tests
         run: godot --headless --path . --script tests/run_tests.gd
 
+      - name: Verify top HUD compatibility across viewports
+        run: godot --headless --path . --script tests/hud_compatibility_test.gd
+
       - name: Run road routing and movement regression tests
         run: |
           node tests/map_overlay_layers_test.js
