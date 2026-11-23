@@ -1145,6 +1145,20 @@ func _layout_ui() -> void:
 	var css_to_ui_x := viewport_size.x / window_size.x if window_size.x > 0.0 else 1.0
 	var css_to_ui_y := viewport_size.y / window_size.y if window_size.y > 0.0 else 1.0
 	safe_insets = Vector4(safe_insets_css.x * css_to_ui_x, safe_insets_css.y * css_to_ui_y, safe_insets_css.z * css_to_ui_x, safe_insets_css.w * css_to_ui_y)
+	if is_instance_valid(save_overlay) and save_overlay.name == "ManualSaveOverlay":
+		var modal_center := save_overlay.get_child(0) as CenterContainer if save_overlay.get_child_count() > 0 else null
+		if is_instance_valid(modal_center):
+			modal_center.offset_left = safe_insets.x + 12.0
+			modal_center.offset_right = -(safe_insets.z + 12.0)
+			modal_center.offset_top = safe_insets.y + 12.0
+			modal_center.offset_bottom = -(safe_insets.w + 12.0)
+		var modal_card := save_overlay.find_child("ManualSaveCard", true, false) as PanelContainer
+		if is_instance_valid(modal_card):
+			modal_card.custom_minimum_size.x = minf(520.0, viewport_size.x - safe_insets.x - safe_insets.z - 32.0)
+		var slot_scroll := save_overlay.find_child("ManualSaveSlotsScroll", true, false) as ScrollContainer
+		if is_instance_valid(slot_scroll):
+			slot_scroll.custom_minimum_size.x = maxf(0.0, modal_card.custom_minimum_size.x - 40.0) if is_instance_valid(modal_card) else 0.0
+			slot_scroll.custom_minimum_size.y = minf(270.0, maxf(180.0, viewport_size.y - safe_insets.y - safe_insets.w - 360.0))
 	for speed_button in speed_buttons.values():
 		speed_button.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
 	if is_instance_valid(follow_rider_button):
@@ -2950,6 +2964,7 @@ func _show_load_game() -> void:
 	center.add_child(card)
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	card.add_child(column)
 	column.add_child(_label("LOAD GAME", 19, "#f1f6fa"))
 	var description := _label("Each game is saved separately. Legacy map coordinates stay fictional.", 12, "#a8bac8")
@@ -3013,9 +3028,14 @@ func _show_manual_save_slots() -> void:
 	add_child(save_overlay)
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.offset_left = safe_insets.x + 12.0
+	center.offset_right = -(safe_insets.z + 12.0)
+	center.offset_top = safe_insets.y + 12.0
+	center.offset_bottom = -(safe_insets.w + 12.0)
 	save_overlay.add_child(center)
 	var card := PanelContainer.new()
-	card.custom_minimum_size = Vector2(minf(360.0, viewport_size.x - 32.0), 0)
+	card.name = "ManualSaveCard"
+	card.custom_minimum_size = Vector2(minf(520.0, viewport_size.x - safe_insets.x - safe_insets.z - 32.0), 0)
 	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
 	center.add_child(card)
 	var column := VBoxContainer.new()
@@ -3026,10 +3046,15 @@ func _show_manual_save_slots() -> void:
 	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(description)
 	var scroll := ScrollContainer.new()
+	scroll.name = "ManualSaveSlotsScroll"
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.custom_minimum_size.y = minf(330.0, maxf(120.0, viewport_size.y - 310.0))
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.custom_minimum_size.x = maxf(0.0, card.custom_minimum_size.x - 40.0)
+	scroll.custom_minimum_size.y = minf(270.0, maxf(180.0, viewport_size.y - safe_insets.y - safe_insets.w - 360.0))
 	column.add_child(scroll)
 	var slots := VBoxContainer.new()
+	slots.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slots.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 	scroll.add_child(slots)
 	for slot in range(1, MANUAL_SLOT_COUNT + 1):
@@ -3040,23 +3065,32 @@ func _show_manual_save_slots() -> void:
 
 func _manual_slot_card(slot: int, mode: String) -> Control:
 	var panel := PanelContainer.new()
+	panel.name = "ManualSaveSlot%d" % slot
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.add_theme_stylebox_override("panel", _panel_style("#152e3e", 13))
-	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 3)
-	panel.add_child(column)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	panel.add_child(row)
 	var payload := _manual_slot_payload(slot)
 	var slot_exists := _manual_slot_exists(slot)
-	column.add_child(_label("SLOT %d · %s" % [slot, "SAVED GAME" if not payload.is_empty() else "EMPTY" if not slot_exists else "UNAVAILABLE"], 12, "#45d9ec"))
+	var slot_label := _label("SLOT %d\n%s" % [slot, "SAVED" if not payload.is_empty() else "EMPTY" if not slot_exists else "UNAVAILABLE"], 10, "#45d9ec")
+	slot_label.custom_minimum_size = Vector2(58, 44)
+	slot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	slot_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	slot_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	row.add_child(slot_label)
 	var details := _save_metadata_text(payload) if not payload.is_empty() else "No save in this slot." if not slot_exists else "This saved file cannot be read; it has been kept unchanged."
 	var detail_label := _label(details, 11, "#a8bac8")
 	detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	column.add_child(detail_label)
-	var action := _button("Save to Slot %d" % slot if mode == "save" else "Load Slot %d" % slot, func(): _save_manual_slot(slot) if mode == "save" else _load_manual_slot(slot))
-	action.custom_minimum_size.y = 46
+	detail_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(detail_label)
+	var action_text := ("Overwrite" if slot_exists else "Save") if mode == "save" else "Load Slot %d" % slot
+	var action := _button(action_text, func(): _save_manual_slot(slot) if mode == "save" else _load_manual_slot(slot))
+	action.custom_minimum_size = Vector2(92 if mode == "save" else 108, 48)
 	action.disabled = mode == "load" and payload.is_empty()
 	_set_button_variant(action, "action" if mode == "save" or not payload.is_empty() else "quiet")
-	column.add_child(action)
+	row.add_child(action)
 	return panel
 
 func _manual_slot_exists(slot: int) -> bool:
