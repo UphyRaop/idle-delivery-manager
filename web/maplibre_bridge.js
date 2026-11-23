@@ -116,9 +116,8 @@
         minZoom: MIN_ZOOM,
         maxZoom: MAX_ZOOM,
         // OpenFreeMap serves CORS-enabled styles and tiles suitable for use
-        // from this production origin. Keep the required source attribution
-        // collapsed to a small corner control; MapLibre expands its linked
-        // provider credits when the player opens it.
+        // from this production origin. Keep MapLibre's linked provider credits
+        // visible as a compact text strip rather than a disclosure panel.
         attributionControl: false,
         logoPosition: "bottom-left",
         pitch: 0,
@@ -138,7 +137,7 @@
         clickTolerance: 8,
         trackResize: true,
       });
-      const attributionControl = new window.maplibregl.AttributionControl({ compact: true });
+      const attributionControl = new window.maplibregl.AttributionControl({ compact: false });
       map.addControl(attributionControl, "top-left");
       attributionControlElement = root.querySelector(".maplibregl-ctrl-attrib");
       if (!attributionControlElement) throw new Error("MapLibre attribution control was not created.");
@@ -152,12 +151,6 @@
       map.touchZoomRotate.disableRotation();
       map.on("load", function () {
         ready = true;
-        // Compact mode is applied on MapLibre's first measured resize. Collapse
-        // its initial credits panel after that pass, leaving a corner toggle.
-        window.requestAnimationFrame(function () {
-          const attributionToggle = attributionControlElement.querySelector(".maplibregl-ctrl-attrib-button");
-          if (attributionToggle && attributionControlElement.classList.contains("maplibregl-compact-show")) attributionToggle.click();
-        });
         emit("idm-map-ready", getCamera());
       });
       map.on("style.load", function () {
@@ -238,21 +231,29 @@
     return Boolean(target && typeof target.closest === "function" && target.closest("#idm-map-attribution"));
   }
 
-  // Godot's canvas is composited above the MapLibre DOM controls. Route taps
-  // in the compact credit affordance to MapLibre and keep them out of game/map
-  // gestures, otherwise a visible attribution control cannot be opened.
+  // Godot's canvas can win hit-testing over body-portaled controls. Forward
+  // deliberate taps on the linked provider text while preventing them from
+  // becoming map pans. Native DOM activation is used when the credit itself
+  // is the hit-tested target.
   function forwardAttributionPointer(event) {
-    if (!event || !event.isTrusted || !mapRoot) return false;
+    if (!event || !event.isTrusted || !attributionControlElement) return false;
     const id = pointerId(event);
     const type = eventType(event);
     const point = eventPoint(event);
     const active = attributionPointers.get(id);
-    const button = document.querySelector("#idm-map-attribution .maplibregl-ctrl-attrib-button");
-    const rect = button ? button.getBoundingClientRect() : null;
-    const insideButton = Boolean(rect && point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom);
+    const linkAtPoint = function (position) {
+      const links = attributionControlElement.querySelectorAll("a[href]");
+      for (const link of links) {
+        const rect = link.getBoundingClientRect();
+        if (position.x >= rect.left && position.x <= rect.right && position.y >= rect.top && position.y <= rect.bottom) return link;
+      }
+      return null;
+    };
 
-    if (!active && type === "pointerdown" && event.button === 0 && insideButton) {
-      attributionPointers.set(id, { x: point.x, y: point.y, moved: false });
+    if (!active && type === "pointerdown" && event.button === 0) {
+      const link = linkAtPoint(point);
+      if (!link) return false;
+      attributionPointers.set(id, { x: point.x, y: point.y, link: link, moved: false });
       event.preventDefault();
       event.stopImmediatePropagation();
       return true;
@@ -269,7 +270,7 @@
       attributionPointers.delete(id);
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (type === "pointerup" && !active.moved && insideButton && button) button.click();
+      if (type === "pointerup" && !active.moved && linkAtPoint(point) === active.link && active.link.isConnected) active.link.click();
       return true;
     }
     return false;

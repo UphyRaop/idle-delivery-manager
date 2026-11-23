@@ -24,63 +24,51 @@
   touch-action: none;
 }
 
-/* Keep provider credits available without the old wide attribution block. */
-#idm-map-attribution,
-#idm-map-attribution.maplibregl-compact {
+/* Always show linked provider credits as a small text strip. The native
+   compact disclosure expands into a large bordered card on mobile. */
+#idm-map-attribution {
   position: fixed;
-  z-index: 20;
+  z-index: 10000;
   top: calc(146px + env(safe-area-inset-top, 0px));
   left: calc(10px + env(safe-area-inset-left, 0px));
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(272px, calc(100vw - 116px - env(safe-area-inset-left, 0px)));
+  max-height: 30px;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
   color: #e5edf2;
-  background: rgb(8 22 31 / 78%);
-  border: 1px solid rgb(190 217 228 / 28%);
-  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  transform: none !important;
   font: 10px/1.35 system-ui, sans-serif;
   pointer-events: auto;
+  text-shadow: 0 1px 2px #07131b, 0 0 4px #07131b;
 }
 
-/* Small map-corner affordance; MapLibre opens its linked credits on tap. */
-#idm-map-attribution.maplibregl-compact {
-  box-sizing: border-box;
-  width: 40px;
-  min-height: 40px;
-  height: 40px;
-  margin: 0;
-  padding: 2px;
-}
-
-#idm-map-attribution.maplibregl-compact-show {
-  width: auto;
-  height: auto;
-  max-width: min(258px, calc(100vw - 24px));
-  padding: 4px 28px 4px 8px;
+#idm-map-attribution .maplibregl-ctrl-attrib-inner {
+  display: block;
+  max-width: 100%;
   white-space: normal;
+  text-wrap: balance;
 }
 
-#idm-map-attribution .maplibregl-ctrl-attrib-button {
-  width: 34px;
-  height: 34px;
-  border-radius: 4px;
-  background-color: transparent !important;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e5edf2' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 11v6m0-10h.01' stroke-linecap='round'/%3E%3C/svg%3E") !important;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: 24px 24px;
-}
-
-#idm-map-attribution.maplibregl-compact-show .maplibregl-ctrl-attrib-button {
-  background-color: rgb(255 255 255 / 7%) !important;
-}
-
-/* Keep required attribution clear of the game HUD and map controls. */
-#idm-map-root .maplibregl-ctrl-top-left {
-  top: calc(146px + env(safe-area-inset-top, 0px));
-  left: calc(10px + env(safe-area-inset-left, 0px));
+#idm-map-attribution > summary {
+  display: none;
 }
 
 #idm-map-attribution a {
-  color: #b7e8ef;
+  color: #d7f4f7;
   text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+#idm-map-attribution a:focus-visible {
+  outline: 2px solid #53d8e8;
+  outline-offset: 2px;
 }
 
 #idm-map-root .maplibregl-ctrl-logo {
@@ -108,7 +96,7 @@
 
 @media (orientation: landscape) {
   #idm-map-attribution {
-    top: calc(142px + env(safe-area-inset-top, 0px));
+    top: calc(146px + env(safe-area-inset-top, 0px));
     left: calc(10px + env(safe-area-inset-left, 0px));
   }
 }
