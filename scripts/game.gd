@@ -385,7 +385,7 @@ func _render_main_menu() -> void:
 	center.add_child(card)
 	var column := VBoxContainer.new()
 	var compact := viewport_size.y <= 440.0
-	column.add_theme_constant_override("separation", int(round((5 if compact else 10) * ui_layout_scale)))
+	column.add_theme_constant_override("separation", int(round((ThemeService.dense_space("sm") if compact else ThemeService.dense_space("md")) * ui_layout_scale)))
 	card.add_child(column)
 	if menu_settings_open:
 		column.add_child(_label("SETTINGS", 19, "#f1f6fa"))
@@ -548,14 +548,14 @@ func _return_to_main_menu() -> void:
 	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
 	center.add_child(card)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 10)
+	column.add_theme_constant_override("separation", ThemeService.dense_space("md"))
 	card.add_child(column)
 	column.add_child(_label("RETURN TO MAIN MENU?", 17, "#f1f6fa"))
 	var hint := _label("Your current progress will be saved before returning. The simulation will pause and can be continued later.", 13, "#a8bac8")
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(hint)
 	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 8)
+	actions.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 	column.add_child(actions)
 	var cancel := _button("Cancel", func(): return_menu_confirmation.queue_free())
 	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -586,7 +586,9 @@ func _build_ui() -> void:
 
 	hud = PanelContainer.new()
 	hud.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	hud.add_theme_stylebox_override("panel", _panel_style("#101e2b", 18))
+	# The approved HUD keeps its original spacing and dimensions; dense page
+	# tokens below apply to all other panels and dialogs.
+	hud.add_theme_stylebox_override("panel", _panel_style("#101e2b", 18, true))
 	add_child(hud)
 	var top_row := HBoxContainer.new()
 	top_row.add_theme_constant_override("separation", ThemeService.space("xs"))
@@ -672,7 +674,7 @@ func _build_ui() -> void:
 	sheet.add_theme_stylebox_override("panel", _panel_style("#102433", 22))
 	add_child(sheet)
 	sheet_content = VBoxContainer.new()
-	sheet_content.add_theme_constant_override("separation", 6)
+	sheet_content.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 	sheet.add_child(sheet_content)
 
 	sheet_handle_row = CenterContainer.new()
@@ -684,7 +686,7 @@ func _build_ui() -> void:
 	sheet_handle_row.add_child(sheet_grabber)
 
 	sheet_header_row = HBoxContainer.new()
-	sheet_header_row.add_theme_constant_override("separation", 8)
+	sheet_header_row.add_theme_constant_override("separation", ThemeService.dense_space("md"))
 	sheet_content.add_child(sheet_header_row)
 	sheet_header_label = _label("INCOMING BOOKINGS", 12, "#91a8ba")
 	sheet_header_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -693,7 +695,7 @@ func _build_ui() -> void:
 	sheet_toggle_button.custom_minimum_size = Vector2(76, 44)
 	sheet_header_row.add_child(sheet_toggle_button)
 	sheet_subtabs = HBoxContainer.new()
-	sheet_subtabs.add_theme_constant_override("separation", 5)
+	sheet_subtabs.add_theme_constant_override("separation", ThemeService.dense_space("xs"))
 	sheet_subtabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sheet_subtabs.name = "Subtabs"
 	sheet_content.add_child(sheet_subtabs)
@@ -781,7 +783,7 @@ func _build_waiting_bookings_page() -> void:
 	waiting_bookings_page_margin = MarginContainer.new()
 	waiting_bookings_page.add_child(waiting_bookings_page_margin)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 10)
+	column.add_theme_constant_override("separation", ThemeService.dense_space("md"))
 	waiting_bookings_page_margin.add_child(column)
 	var header := HBoxContainer.new()
 	column.add_child(header)
@@ -801,7 +803,7 @@ func _build_waiting_bookings_page() -> void:
 	column.add_child(scroll)
 	waiting_bookings_page_list = VBoxContainer.new()
 	waiting_bookings_page_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	waiting_bookings_page_list.add_theme_constant_override("separation", 8)
+	waiting_bookings_page_list.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 	scroll.add_child(waiting_bookings_page_list)
 
 func _refresh_waiting_bookings_page() -> void:
@@ -823,7 +825,7 @@ func _refresh_waiting_bookings_page() -> void:
 		card.add_theme_stylebox_override("panel", _panel_style("#102433", 12))
 		waiting_bookings_page_list.add_child(card)
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 10)
+		row.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 		card.add_child(row)
 		var details := VBoxContainer.new()
 		details.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -866,14 +868,14 @@ func _review_booking_on_map(order_id: int) -> void:
 	_refresh()
 	_layout_ui()
 
-func _panel_style(color: String, radius: int) -> StyleBoxFlat:
+func _panel_style(color: String, radius: int, preserve_existing_spacing: bool = false) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = ThemeService.color("panel")
 	style.set_corner_radius_all(radius)
-	style.content_margin_left = ThemeService.space("md")
-	style.content_margin_right = ThemeService.space("md")
-	style.content_margin_top = ThemeService.panel_padding("compact")
-	style.content_margin_bottom = ThemeService.panel_padding("compact")
+	style.content_margin_left = ThemeService.space("md") if preserve_existing_spacing else ThemeService.dense_space("md")
+	style.content_margin_right = ThemeService.space("md") if preserve_existing_spacing else ThemeService.dense_space("md")
+	style.content_margin_top = ThemeService.panel_padding("compact") if preserve_existing_spacing else ThemeService.dense_panel_padding("compact")
+	style.content_margin_bottom = ThemeService.panel_padding("compact") if preserve_existing_spacing else ThemeService.dense_panel_padding("compact")
 	style.border_width_left = 1
 	style.border_width_top = 1
 	style.border_width_right = 1
@@ -979,7 +981,7 @@ func _build_map_legend() -> void:
 	map_legend_panel.visible = false
 	add_child(map_legend_panel)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 6)
+	column.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 	map_legend_panel.add_child(column)
 	var header := HBoxContainer.new()
 	column.add_child(header)
@@ -1039,7 +1041,15 @@ func _layout_map_legend() -> void:
 func _label(text: String, size: int, color: String) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_size_override("font_size", maxi(ThemeService.font_size("caption"), int(round(float(size) * ui_scale))))
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	var dense_size := ThemeService.dense_font_size("caption")
+	if size >= 19:
+		dense_size = ThemeService.dense_font_size("title")
+	elif size >= 16:
+		dense_size = ThemeService.dense_font_size("section")
+	elif size >= 13:
+		dense_size = ThemeService.dense_font_size("body")
+	label.add_theme_font_size_override("font_size", maxi(ThemeService.dense_font_size("caption"), int(round(float(dense_size) * ui_scale))))
 	label.add_theme_color_override("font_color", ThemeService.resolve_existing_text(Color(color)))
 	return label
 
@@ -1196,10 +1206,10 @@ func _layout_ui() -> void:
 		sheet.offset_top = -(safe_bottom + (nav_height + 8 + sheet_height) * ui_layout_scale)
 		sheet.offset_bottom = -(safe_bottom + (nav_height + 8) * ui_layout_scale)
 		var compact_style := _panel_style("#102433", 16)
-		compact_style.content_margin_left = 6.0 * ui_layout_scale
-		compact_style.content_margin_right = 6.0 * ui_layout_scale
-		compact_style.content_margin_top = 4.0 * ui_layout_scale
-		compact_style.content_margin_bottom = 4.0 * ui_layout_scale
+		compact_style.content_margin_left = ThemeService.dense_space("sm") * ui_layout_scale
+		compact_style.content_margin_right = ThemeService.dense_space("sm") * ui_layout_scale
+		compact_style.content_margin_top = ThemeService.dense_panel_padding("compact") * ui_layout_scale
+		compact_style.content_margin_bottom = ThemeService.dense_panel_padding("compact") * ui_layout_scale
 		sheet.add_theme_stylebox_override("panel", compact_style)
 	elif is_desktop or is_landscape:
 		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
@@ -1217,7 +1227,7 @@ func _layout_ui() -> void:
 		sheet.add_theme_stylebox_override("panel", _panel_style("#102433", 22))
 	sheet_handle_row.visible = not map_collapsed and not full_page_tab
 	sheet_header_row.visible = not map_collapsed
-	sheet_content.add_theme_constant_override("separation", 0 if map_collapsed else (3 if is_landscape and sheet_expanded else 6))
+	sheet_content.add_theme_constant_override("separation", 0 if map_collapsed else (ThemeService.dense_space("xs") if is_landscape and sheet_expanded else ThemeService.dense_space("sm")))
 
 	if is_instance_valid(sheet_toggle_button):
 		sheet_toggle_button.visible = selected_tab == "Map"
@@ -1254,10 +1264,10 @@ func _layout_ui() -> void:
 		company_setup_center.offset_bottom = -(safe_bottom + 12.0) * ui_layout_scale
 		company_setup_card.custom_minimum_size.x = maxf(0.0, minf(366.0, viewport_size.x - safe_left - safe_right - 24.0 * ui_layout_scale))
 	if is_instance_valid(waiting_bookings_page_margin):
-		waiting_bookings_page_margin.add_theme_constant_override("margin_left", int(round((safe_left + 16.0) * ui_layout_scale)))
-		waiting_bookings_page_margin.add_theme_constant_override("margin_right", int(round((safe_right + 16.0) * ui_layout_scale)))
-		waiting_bookings_page_margin.add_theme_constant_override("margin_top", int(round((safe_top + 16.0) * ui_layout_scale)))
-		waiting_bookings_page_margin.add_theme_constant_override("margin_bottom", int(round((safe_bottom + 16.0) * ui_layout_scale)))
+		waiting_bookings_page_margin.add_theme_constant_override("margin_left", int(round((safe_left + 12.0) * ui_layout_scale)))
+		waiting_bookings_page_margin.add_theme_constant_override("margin_right", int(round((safe_right + 12.0) * ui_layout_scale)))
+		waiting_bookings_page_margin.add_theme_constant_override("margin_top", int(round((safe_top + 12.0) * ui_layout_scale)))
+		waiting_bookings_page_margin.add_theme_constant_override("margin_bottom", int(round((safe_bottom + 12.0) * ui_layout_scale)))
 	if not main_menu_active:
 		bottom_nav.visible = game_session_started and not waiting_bookings_page_open
 		waiting_bookings_page.visible = waiting_bookings_page_open and game_session_started
@@ -1883,15 +1893,15 @@ func _button(label: String, callback: Callable) -> Button:
 	button.set_meta("ui_variant", "default")
 	button.custom_minimum_size.y = maxf(44.0, _ui_size(ThemeService.control_height("compact")))
 	button.pressed.connect(callback)
-	button.add_theme_font_size_override("font_size", int(round(14.0 * ui_scale)))
+	button.add_theme_font_size_override("font_size", int(round(ThemeService.dense_font_size("body") * ui_scale)))
 	button.add_theme_color_override("font_color", ThemeService.color("button_text"))
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = ThemeService.color("button")
 	normal.set_corner_radius_all(ThemeService.corner_radius("control"))
-	normal.content_margin_left = ThemeService.space("sm")
-	normal.content_margin_right = ThemeService.space("sm")
-	normal.content_margin_top = 5
-	normal.content_margin_bottom = 5
+	normal.content_margin_left = ThemeService.dense_space("sm")
+	normal.content_margin_right = ThemeService.dense_space("sm")
+	normal.content_margin_top = 3
+	normal.content_margin_bottom = 3
 	button.add_theme_stylebox_override("normal", normal)
 	var hover := normal.duplicate()
 	hover.bg_color = ThemeService.color("button_hover")
@@ -1918,8 +1928,8 @@ func _set_button_variant(button: Button, variant: String) -> void:
 		"quiet": normal.bg_color = ThemeService.color("panel")
 		_: normal.bg_color = ThemeService.color("button")
 	normal.set_corner_radius_all(9 if variant in ["speed", "speed_selected"] else ThemeService.corner_radius("control"))
-	normal.content_margin_left = ThemeService.space("sm")
-	normal.content_margin_right = ThemeService.space("sm")
+	normal.content_margin_left = ThemeService.dense_space("sm")
+	normal.content_margin_right = ThemeService.dense_space("sm")
 	button.add_theme_stylebox_override("normal", normal)
 	var hover := normal.duplicate() as StyleBoxFlat
 	hover.bg_color = ThemeService.color("button_hover")
@@ -2381,7 +2391,7 @@ func _refresh() -> void:
 			if selected_subtab == "Fleet":
 				order_list.add_child(_label("PARTNER NETWORK", 11, "#91a8ba"))
 				var fleet_row := HBoxContainer.new()
-				fleet_row.add_theme_constant_override("separation", 6)
+				fleet_row.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 				order_list.add_child(fleet_row)
 				fleet_row.add_child(_metric_card("AVAILABLE", str(_ready_count())))
 				fleet_row.add_child(_metric_card("ON ROUTE", str(_busy_count())))
@@ -2394,7 +2404,7 @@ func _refresh() -> void:
 			else:
 				order_list.add_child(_label("COMPANY · %s" % player_company_name, 12, "#f1f6fa"))
 				var company_row := HBoxContainer.new()
-				company_row.add_theme_constant_override("separation", 6)
+				company_row.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 				order_list.add_child(company_row)
 				company_row.add_child(_metric_card("PARTNERS", str(riders.size())))
 				company_row.add_child(_metric_card("DELIVERIES", str(delivered)))
@@ -2407,12 +2417,12 @@ func _refresh() -> void:
 			if selected_subtab == "Statements":
 				order_list.add_child(_label("FINANCIAL SUMMARY  ·  ALL AMOUNTS IN RM", 11, "#91a8ba"))
 			var metrics_row := HBoxContainer.new()
-			metrics_row.add_theme_constant_override("separation", 8)
+			metrics_row.add_theme_constant_override("separation", ThemeService.dense_space("card"))
 			order_list.add_child(metrics_row)
 			metrics_row.add_child(_metric_card("AVAILABLE CASH", _format_rm(cash)))
 			metrics_row.add_child(_metric_card("TOTAL REVENUE", _format_rm(revenue_total)))
 			var totals_row := HBoxContainer.new()
-			totals_row.add_theme_constant_override("separation", 8)
+			totals_row.add_theme_constant_override("separation", ThemeService.dense_space("card"))
 			order_list.add_child(totals_row)
 			totals_row.add_child(_metric_card("OPERATING COST", _format_rm(cost_total)))
 			totals_row.add_child(_metric_card("COMPLETED JOBS", str(delivered)))
@@ -2445,7 +2455,7 @@ func _refresh() -> void:
 				_set_button_variant(continue_button, "action")
 				order_list.add_child(continue_button)
 				var save_actions := HBoxContainer.new()
-				save_actions.add_theme_constant_override("separation", 6)
+				save_actions.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 				order_list.add_child(save_actions)
 				var load_button := _button("Load Game", _show_load_game)
 				load_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2468,10 +2478,10 @@ func _refresh() -> void:
 func _metric_card(title: String, value: String) -> Control:
 	var card := PanelContainer.new()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card.custom_minimum_size = Vector2(0, 56)
+	card.custom_minimum_size = Vector2(0, 52)
 	var card_style := _panel_style("#152e3e", 13)
-	card_style.content_margin_left = ThemeService.space("sm")
-	card_style.content_margin_right = ThemeService.space("sm")
+	card_style.content_margin_left = ThemeService.dense_space("sm")
+	card_style.content_margin_right = ThemeService.dense_space("sm")
 	card_style.content_margin_top = ThemeService.space("xxs")
 	card_style.content_margin_bottom = ThemeService.space("xxs")
 	card.add_theme_stylebox_override("panel", card_style)
@@ -2482,7 +2492,7 @@ func _metric_card(title: String, value: String) -> Control:
 	heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stack.add_child(heading)
 	var amount := _label(value, ThemeService.font_size("metric"), "#f1f6fa")
-	var amount_size := 18 if value.length() <= 10 else 15 if value.length() <= 14 else 13
+	var amount_size := 16 if value.length() <= 10 else 14 if value.length() <= 14 else 13
 	amount.add_theme_font_size_override("font_size", int(round(float(amount_size) * ui_scale)))
 	stack.add_child(amount)
 	return card
@@ -2561,7 +2571,7 @@ func _confirm_new_game() -> void:
 	company_setup_card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
 	company_setup_center.add_child(company_setup_card)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 7)
+	column.add_theme_constant_override("separation", ThemeService.dense_space("card"))
 	company_setup_card.add_child(column)
 	column.add_child(_label("CREATE YOUR COMPANY", 18, "#f1f6fa"))
 	var message := _label("Choose your first service and a supported real KL / Selangor location. Existing saves stay untouched.", 12, "#a8bac8")
@@ -2583,8 +2593,8 @@ func _confirm_new_game() -> void:
 	input_style.border_color = Color("#315263")
 	input_style.set_border_width_all(1)
 	input_style.set_corner_radius_all(12)
-	input_style.content_margin_left = 12
-	input_style.content_margin_right = 12
+	input_style.content_margin_left = ThemeService.dense_space("md")
+	input_style.content_margin_right = ThemeService.dense_space("md")
 	company_name_input.add_theme_stylebox_override("normal", input_style)
 	company_name_input.add_theme_stylebox_override("focus", input_style.duplicate())
 	column.add_child(company_name_input)
@@ -2613,7 +2623,7 @@ func _confirm_new_game() -> void:
 	company_setup_error.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(company_setup_error)
 	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 8)
+	actions.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 	column.add_child(actions)
 	var cancel_button := _button("Cancel", _close_new_game_confirmation)
 	cancel_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2764,7 +2774,7 @@ func _show_load_game() -> void:
 	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
 	center.add_child(card)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 8)
+	column.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 	card.add_child(column)
 	column.add_child(_label("LOAD GAME", 19, "#f1f6fa"))
 	var description := _label("Each game is saved separately. Legacy map coordinates stay fictional.", 12, "#a8bac8")
@@ -2774,7 +2784,7 @@ func _show_load_game() -> void:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	column.add_child(scroll)
 	var profile_list := VBoxContainer.new()
-	profile_list.add_theme_constant_override("separation", 6)
+	profile_list.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 	scroll.add_child(profile_list)
 	profile_list.add_child(_label("MANUAL SAVES", 11, "#91a8ba"))
 	for slot in range(1, MANUAL_SLOT_COUNT + 1):
@@ -2834,7 +2844,7 @@ func _show_manual_save_slots() -> void:
 	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
 	center.add_child(card)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 8)
+	column.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 	card.add_child(column)
 	column.add_child(_label("SAVE GAME", 19, "#f1f6fa"))
 	var description := _label("Manual slots are separate from your autosave. Existing slots require confirmation before replacement.", 12, "#a8bac8")
@@ -2845,7 +2855,7 @@ func _show_manual_save_slots() -> void:
 	scroll.custom_minimum_size.y = minf(330.0, maxf(120.0, viewport_size.y - 310.0))
 	column.add_child(scroll)
 	var slots := VBoxContainer.new()
-	slots.add_theme_constant_override("separation", 6)
+	slots.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 	scroll.add_child(slots)
 	for slot in range(1, MANUAL_SLOT_COUNT + 1):
 		slots.add_child(_manual_slot_card(slot, "save"))
@@ -2968,14 +2978,14 @@ func _confirm_manual_slot_overwrite(slot: int) -> void:
 	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
 	center.add_child(card)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 10)
+	column.add_theme_constant_override("separation", ThemeService.dense_space("md"))
 	card.add_child(column)
 	column.add_child(_label("OVERWRITE SLOT %d?" % slot, 18, "#f1f6fa"))
 	var warning := _label("The existing manual save will be backed up before replacement. Your separate autosave will not be changed.", 13, "#a8bac8")
 	warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(warning)
 	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 6)
+	actions.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
 	column.add_child(actions)
 	var cancel := _button("Cancel", _cancel_manual_slot_overwrite)
 	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -3528,7 +3538,7 @@ func _show_save_recovery() -> void:
 	card.add_theme_stylebox_override("panel", _panel_style("#102433", 20))
 	center.add_child(card)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 10)
+	column.add_theme_constant_override("separation", ThemeService.dense_space("md"))
 	card.add_child(column)
 	column.add_child(_label("SAVE NEEDS ATTENTION", 17, "#f1f6fa"))
 	column.add_child(_label("Your existing save was kept unchanged. Try loading it again, or start a separate recovery game.", 13, "#a8bac8"))

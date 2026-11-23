@@ -57,6 +57,9 @@ jobs:
       - name: Verify icon-only full-page navigation
         run: godot --headless --path . --script tests/full_page_navigation_test.gd
 
+      - name: Verify dense UI tokens and HUD preservation
+        run: godot --headless --path . --script tests/dense_ui_test.gd
+
       - name: Run road routing and movement regression tests
         run: |
           node tests/map_overlay_layers_test.js
