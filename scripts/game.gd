@@ -450,13 +450,9 @@ func _render_main_menu() -> void:
 	column.add_child(_menu_button("Settings", _open_menu_settings, false))
 	var footer := VBoxContainer.new()
 	footer.name = "MainMenuCredits"
-	footer.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	footer.offset_left = (safe_insets.x + 16.0) * ui_layout_scale
-	footer.offset_right = viewport_size.x - (safe_insets.z + 16.0) * ui_layout_scale
-	footer.offset_top = viewport_size.y - safe_insets.w - 58.0 * ui_layout_scale
-	footer.offset_bottom = viewport_size.y - safe_insets.w - 8.0 * ui_layout_scale
 	footer.add_theme_constant_override("separation", 1)
-	menu_overlay.add_child(footer)
+	footer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.add_child(footer)
 	var creator := _label("Created by UphyRaop", 11, "#8199aa")
 	creator.name = "MainMenuCreatorCredit"
 	creator.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
