@@ -55,6 +55,7 @@ var next_order_id := 1
 var next_rider_id := 1
 var selected_order := -1
 var selected_rider_id := -1
+var selected_dispatch_partner_id := -1
 var map_view: Control
 var order_list: VBoxContainer
 var rider_summary: Label
@@ -789,11 +790,12 @@ func _build_waiting_bookings_page() -> void:
 	var header := HBoxContainer.new()
 	column.add_child(header)
 	var title := _label("WAITING BOOKINGS", 18, "#45d9ec")
+	title.add_theme_font_size_override("font_size", 14)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
-	var back_button := _button("Back to Map", _close_waiting_bookings_page)
+	var back_button := _button("Map", _close_waiting_bookings_page)
 	back_button.name = "WaitingBookingsBackButton"
-	back_button.custom_minimum_size = Vector2(132, 48)
+	back_button.custom_minimum_size = Vector2(76, 48)
 	back_button.accessibility_name = "Back to Map"
 	header.add_child(back_button)
 	var summary := _label("Review a booking, then return to its map marker.", 12, "#a8bac8")
@@ -825,21 +827,63 @@ func _refresh_waiting_bookings_page() -> void:
 		var card := PanelContainer.new()
 		card.add_theme_stylebox_override("panel", _panel_style("#102433", 12))
 		waiting_bookings_page_list.add_child(card)
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
-		card.add_child(row)
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
+		card.add_child(column)
 		var details := VBoxContainer.new()
-		details.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(details)
+		column.add_child(details)
 		var service := IDMServicePricing.short_label(str(order.get("service_type", "parcel_logistics")))
 		details.add_child(_label("BOOKING %03d  ·  %s" % [order_id, service], 13, "#f1f6fa"))
 		var eta := int(ceil(float(order.get("route_eta_seconds", 0.0)) / 60.0))
-		details.add_child(_label("Waiting  ·  %s  ·  ~%d min" % [_format_rm(float(order.get("payout", 0.0))), eta], 11, "#a8bac8"))
-		var review := _button("Review", func(): _review_booking_on_map(order_id))
+		var distance := float(order.get("route_distance_km", 0.0))
+		details.add_child(_label("Waiting  ·  %s  ·  %.1f km  ·  ~%d min" % [_format_rm(float(order.get("payout", 0.0))), distance, eta], 11, "#a8bac8"))
+		var pickup_uv: Vector2 = _as_vector2(order.get("pickup", ""), Vector2.ZERO)
+		var destination_uv: Vector2 = _as_vector2(order.get("destination", ""), Vector2.ZERO)
+		if geographic_map_available and not legacy_map_mode:
+			var pickup_geo := geographic_service.uv_to_geo(pickup_uv)
+			var destination_geo := geographic_service.uv_to_geo(destination_uv)
+			var locations := _label("Pickup %.4f, %.4f  →  Drop-off %.4f, %.4f" % [pickup_geo.y, pickup_geo.x, destination_geo.y, destination_geo.x], 10, "#91a8ba")
+			locations.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			details.add_child(locations)
+		var candidates := _eligible_partner_candidates(order)
+		var partner_picker := OptionButton.new()
+		partner_picker.name = "PartnerPicker%d" % order_id
+		partner_picker.custom_minimum_size = Vector2(0, 48)
+		partner_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		partner_picker.fit_to_longest_item = false
+		partner_picker.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
+		partner_picker.accessibility_name = "Choose an eligible partner for booking %03d" % order_id
+		for candidate in candidates:
+			var rider_id := int(candidate.get("rider_id", -1))
+			var label := "Recommended · Partner %02d" % rider_id if partner_picker.item_count == 0 else "Partner %02d" % rider_id
+			if geographic_map_available and not legacy_map_mode:
+				label += " · %.1f km to pickup" % float(candidate.get("pickup_distance_km", 0.0))
+			partner_picker.add_item(label, rider_id)
+		if partner_picker.item_count == 0:
+			partner_picker.add_item("No eligible available partner", -1)
+			partner_picker.disabled = true
+		elif selected_dispatch_partner_id >= 0:
+			for item_index in partner_picker.item_count:
+				if partner_picker.get_item_id(item_index) == selected_dispatch_partner_id:
+					partner_picker.select(item_index)
+					break
+		column.add_child(partner_picker)
+		var actions := HBoxContainer.new()
+		actions.add_theme_constant_override("separation", ThemeService.dense_space("sm"))
+		column.add_child(actions)
+		var review := _button("Map", func(): _review_booking_on_map(order_id))
 		review.name = "ReviewBooking%d" % order_id
-		review.custom_minimum_size = Vector2(92, 48)
+		review.custom_minimum_size = Vector2(82, 48)
 		review.accessibility_name = "Review booking %03d on map" % order_id
-		row.add_child(review)
+		actions.add_child(review)
+		var dispatch := _button("Dispatch", func(): _dispatch(order_id, partner_picker.get_selected_id()))
+		dispatch.name = "DispatchBooking%d" % order_id
+		dispatch.custom_minimum_size = Vector2(0, 48)
+		dispatch.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		dispatch.accessibility_name = "Dispatch booking %03d to selected eligible partner" % order_id
+		dispatch.disabled = candidates.is_empty()
+		_set_button_variant(dispatch, "action")
+		actions.add_child(dispatch)
 
 func _open_waiting_bookings_page() -> void:
 	if not is_instance_valid(waiting_bookings_page):
@@ -1860,15 +1904,22 @@ func _select_marker(point: Vector2) -> void:
 			if rider.is_empty():
 				return
 			selected_rider_id = rider_id
+			if _partner_is_available(rider):
+				selected_dispatch_partner_id = rider_id
 			var active_order := _find_order(int(rider.get("order_id", -1))) if str(rider.get("status", "ready")) == "busy" else {}
 			if not active_order.is_empty() and str(active_order.get("status", "")) not in ["Delivered", "Cancelled"]:
 				selected_order = int(active_order.get("id", -1))
 				sheet_expanded = true
 				status_label.text = "Active partner %02d · booking %03d" % [rider_id, selected_order]
 			else:
-				selected_order = -1
-				sheet_expanded = false
-				status_label.text = "Available partner %02d · ready for a booking" % rider_id
+				var current_order := _find_order(selected_order)
+				if not current_order.is_empty() and str(current_order.get("status", "")) == "Waiting" and _partner_is_eligible_for_order(rider, current_order):
+					sheet_expanded = true
+					status_label.text = "Partner %02d selected for booking %03d" % [rider_id, int(current_order.get("id", -1))]
+				else:
+					selected_order = -1
+					sheet_expanded = false
+					status_label.text = "Available partner %02d · ready for a booking" % rider_id
 			_refresh()
 			return
 		var booking_id := int(parsed.data.get("bookingId", -1))
@@ -1876,7 +1927,11 @@ func _select_marker(point: Vector2) -> void:
 		if booking.is_empty() or str(booking.get("status", "")) in ["Delivered", "Cancelled"]:
 			return
 		selected_order = booking_id
-		selected_rider_id = int(booking.get("rider", -1)) if str(booking.get("status", "")).begins_with("On route") else -1
+		if str(booking.get("status", "")).begins_with("On route"):
+			selected_rider_id = int(booking.get("rider", -1))
+			selected_dispatch_partner_id = selected_rider_id
+		elif not _partner_is_available(_find_rider(selected_dispatch_partner_id)) or not _partner_is_eligible_for_order(_find_rider(selected_dispatch_partner_id), booking):
+			selected_dispatch_partner_id = -1
 		sheet_expanded = true
 		status_label.text = ""
 		_refresh()
@@ -2116,58 +2171,155 @@ func _random_order_location(view_size: Vector2) -> Vector2:
 		return candidate
 	return Vector2(-1.0, -1.0)
 
-func _has_reachable_partner(pickup_uv: Vector2) -> bool:
+func _partner_is_available(partner: Dictionary) -> bool:
+	if partner.is_empty() or str(partner.get("status", "ready")) != "ready":
+		return false
+	if int(partner.get("order_id", -1)) >= 0:
+		return false
+	var partner_id := int(partner.get("id", -1))
+	if route_simulations.has(partner_id):
+		var simulation: IDMRouteSimulation = route_simulations.get(partner_id)
+		if simulation != null and simulation.is_active():
+			return false
+	for active_order in orders:
+		if int(active_order.get("rider", -1)) == partner_id and str(active_order.get("status", "")) not in ["Delivered", "Cancelled", "Failed", "Returned"]:
+			return false
+	return true
+
+func _partner_is_eligible_for_order(partner: Dictionary, order: Dictionary) -> bool:
+	if not _partner_is_available(partner) or order.is_empty():
+		return false
+	var service := str(order.get("service_type", "parcel_logistics"))
+	var vehicle := str(partner.get("vehicle_type", ""))
+	var eligibility: Array = partner.get("service_eligibility", [])
+	# Old saves do not carry capability metadata; keep those partners usable.
+	if not eligibility.is_empty() and not eligibility.has(service):
+		return false
+	if vehicle != "":
+		var allowed := true
+		match vehicle:
+			"motorcycle": allowed = service in ["food_delivery", "parcel_logistics", "express_logistics"]
+			"car": allowed = service in ["food_delivery", "parcel_logistics", "e_hailing", "express_logistics"]
+			"van", "truck": allowed = service in ["parcel_logistics", "express_logistics"]
+			_: allowed = false
+		if not allowed:
+			return false
+	var required_capacity := float(order.get("required_capacity", 0.0))
+	if required_capacity > 0.0 and float(partner.get("capacity", 0.0)) < required_capacity:
+		return false
+	return true
+
+func _partner_vehicle_for_service(service_id: String) -> String:
+	match service_id:
+		"e_hailing": return "car"
+		"express_logistics": return "van"
+		_: return "motorcycle"
+
+func _partner_capacity_for_vehicle(vehicle_type: String) -> float:
+	match vehicle_type:
+		"motorcycle": return 8.0
+		"car": return 4.0
+		"van": return 24.0
+		"truck": return 60.0
+		_: return 0.0
+
+func _partner_service_capabilities(vehicle_type: String, preferred_service: String) -> Array[String]:
+	var capabilities: Array[String] = []
+	for service in ["food_delivery", "parcel_logistics", "e_hailing", "express_logistics"]:
+		if vehicle_type == "motorcycle" and service in ["food_delivery", "parcel_logistics", "express_logistics"]:
+			capabilities.append(service)
+		elif vehicle_type == "car":
+			capabilities.append(service)
+		elif vehicle_type in ["van", "truck"] and service in ["parcel_logistics", "express_logistics"]:
+			capabilities.append(service)
+	if not capabilities.has(preferred_service) and preferred_service in IDMServicePricing.service_ids():
+		capabilities.append(preferred_service)
+	return capabilities
+
+func _eligible_partner_candidates(order: Dictionary) -> Array[Dictionary]:
+	var candidates: Array[Dictionary] = []
+	if order.is_empty() or str(order.get("status", "")) != "Waiting":
+		return candidates
+	var pickup_uv: Vector2 = _as_vector2(order.get("pickup", ""), order.get("destination", Vector2.ZERO))
+	var destination_uv: Vector2 = _as_vector2(order.get("destination", ""), Vector2.ZERO)
+	var dropoff_route: Dictionary = {}
+	if geographic_map_available and not legacy_map_mode:
+		if not road_network_available:
+			return candidates
+		dropoff_route = road_router.route_between_uv(pickup_uv, destination_uv)
+		if not dropoff_route.get("ok", false):
+			return candidates
 	for partner in riders:
-		if partner.get("status", "") != "ready":
+		if not _partner_is_eligible_for_order(partner, order):
+			continue
+		var candidate := {"rider_id": int(partner.get("id", -1)), "pickup_distance_km": 0.0, "simulation": null}
+		if geographic_map_available and not legacy_map_mode:
+			var pickup_route := road_router.route_between_uv(_as_vector2(partner.get("position", ""), Vector2.ZERO), pickup_uv)
+			if not pickup_route.get("ok", false):
+				continue
+			var simulation := IDMRouteSimulation.new()
+			if not simulation.initialize(pickup_route, dropoff_route, 25.0):
+				continue
+			candidate["pickup_distance_km"] = float(pickup_route.get("distance_km", 0.0))
+			candidate["simulation"] = simulation
+		else:
+			candidate["pickup_distance_km"] = Vector2(_as_vector2(partner.get("position", ""), Vector2.ZERO)).distance_to(pickup_uv)
+		candidates.append(candidate)
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var distance_a := float(a.get("pickup_distance_km", 0.0))
+		var distance_b := float(b.get("pickup_distance_km", 0.0))
+		if is_equal_approx(distance_a, distance_b):
+			return int(a.get("rider_id", -1)) < int(b.get("rider_id", -1))
+		return distance_a < distance_b
+	)
+	return candidates
+
+func _has_reachable_partner(pickup_uv: Vector2, service_id: String = "") -> bool:
+	var service := service_id if service_id in IDMServicePricing.service_ids() else player_company_service
+	var eligibility_order := {"status": "Waiting", "service_type": service if service in IDMServicePricing.service_ids() else "parcel_logistics"}
+	for partner in riders:
+		if not _partner_is_eligible_for_order(partner, eligibility_order):
 			continue
 		var candidate := road_router.route_between_uv(partner["position"], pickup_uv)
 		if candidate.get("ok", false):
 			return true
 	return false
 
-func _dispatch(order_id: int) -> void:
+func _dispatch(order_id: int, requested_partner_id: int = -1) -> void:
 	var order := _find_order(order_id)
 	if order.is_empty() or order.get("status", "") != "Waiting":
 		return
-	var available := -1
-	var simulation: IDMRouteSimulation
-	if geographic_map_available and not legacy_map_mode:
-		if not road_network_available:
-			status_label.text = road_router.last_error if road_router.last_error != "" else "Road routes unavailable; dispatch was not started"
-			return
-		var pickup_uv: Vector2 = _as_vector2(order.get("pickup", ""), order["destination"])
-		var destination_uv: Vector2 = order["destination"]
-		var dropoff_route := road_router.route_between_uv(pickup_uv, destination_uv)
-		if not dropoff_route.get("ok", false):
-			status_label.text = "Delivery route failed: %s" % dropoff_route.get("error", "unreachable road")
-			return
-		var pickup_error := "No ready partner can reach this pickup by road."
-		for index in riders.size():
-			if riders[index].get("status", "") != "ready":
-				continue
-			var candidate_pickup := road_router.route_between_uv(riders[index]["position"], pickup_uv)
-			if not candidate_pickup.get("ok", false):
-				pickup_error = str(candidate_pickup.get("error", pickup_error))
-				continue
-			var candidate_simulation := IDMRouteSimulation.new()
-			if not candidate_simulation.initialize(candidate_pickup, dropoff_route, 25.0):
-				pickup_error = candidate_simulation.error_message
-				continue
-			available = index
-			simulation = candidate_simulation
-			break
-		if available < 0 or simulation == null:
-			status_label.text = "Dispatch unavailable: %s" % pickup_error
-			return
-	else:
-		for index in riders.size():
-			if riders[index].get("status", "") == "ready":
-				available = index
+	if requested_partner_id < 0:
+		requested_partner_id = selected_dispatch_partner_id
+	var candidates := _eligible_partner_candidates(order)
+	if candidates.is_empty():
+		status_label.text = "No eligible available partner can reach this booking."
+		return
+	var selected_candidate: Dictionary = candidates[0]
+	if requested_partner_id >= 0:
+		var found := false
+		for candidate in candidates:
+			if int(candidate.get("rider_id", -1)) == requested_partner_id:
+				selected_candidate = candidate
+				found = true
 				break
-		if available < 0:
-			status_label.text = "No partner available"
+		if not found:
+			status_label.text = "Selected partner is no longer eligible or available."
+			_refresh_waiting_bookings_page()
 			return
+	var available := -1
+	for index in riders.size():
+		if int(riders[index].get("id", -1)) == int(selected_candidate.get("rider_id", -1)):
+			available = index
+			break
+	if available < 0:
+		status_label.text = "Selected partner is no longer available."
+		return
 	var rider: Dictionary = riders[available]
+	if not _partner_is_eligible_for_order(rider, order):
+		status_label.text = "Selected partner is no longer eligible or available."
+		return
+	var simulation: IDMRouteSimulation = selected_candidate.get("simulation")
 	var rider_id := int(rider["id"])
 	if simulation != null:
 		route_simulations[rider_id] = simulation
@@ -2193,10 +2345,9 @@ func _dispatch(order_id: int) -> void:
 
 func _finish_delivery(rider: Dictionary) -> void:
 	var order := _find_order(rider["order_id"])
-	if order.is_empty() or order.get("status", "") == "Delivered":
-		rider["status"] = "ready"
-		rider["order_id"] = -1
-		route_simulations.erase(int(rider.get("id", -1)))
+	if order.is_empty() or str(order.get("status", "")) == "Delivered":
+		return
+	if not str(order.get("status", "")).begins_with("On route") or int(order.get("rider", -1)) != int(rider.get("id", -2)):
 		return
 	var payout: float = order["payout"]
 	var operating_cost := 18.0
@@ -2227,7 +2378,9 @@ func _hire_rider() -> void:
 		cash += 120
 		status_label.text = "No connected road recruitment location is available"
 		return
-	riders.append({"id": next_rider_id, "status": "ready", "order_id": -1, "remaining": 0.0, "position": new_position})
+	var service_profile := player_company_service if player_company_service in IDMServicePricing.service_ids() else "parcel_logistics"
+	var vehicle_type := _partner_vehicle_for_service(service_profile)
+	riders.append({"id": next_rider_id, "status": "ready", "order_id": -1, "remaining": 0.0, "position": new_position, "vehicle_type": vehicle_type, "capacity": _partner_capacity_for_vehicle(vehicle_type), "service_eligibility": _partner_service_capabilities(vehicle_type, service_profile)})
 	next_rider_id += 1
 	status_label.text = "Rider hired and ready"
 	_save_game()
@@ -2368,7 +2521,13 @@ func _refresh() -> void:
 					order_list.add_child(fare_breakdown)
 				elif sheet_expanded:
 					order_list.add_child(_label("Estimated fare  %s" % _format_rm(float(selected["payout"])), 12, "#c4d3dd"))
-				var dispatch := _button("Dispatch rider", func(): _dispatch(selected["id"]))
+				var eligible_partners := _eligible_partner_candidates(selected)
+				var dispatch_partner_id := selected_dispatch_partner_id
+				if dispatch_partner_id < 0 and not eligible_partners.is_empty():
+					dispatch_partner_id = int(eligible_partners[0].get("rider_id", -1))
+				var partner_feedback := "No eligible available partner" if eligible_partners.is_empty() else "Partner %02d selected" % dispatch_partner_id if selected_dispatch_partner_id >= 0 else "Nearest eligible · Partner %02d" % dispatch_partner_id
+				order_list.add_child(_label(partner_feedback, 11, "#45d9ec" if not eligible_partners.is_empty() else "#f0ad68"))
+				var dispatch := _button("Dispatch rider", func(): _dispatch(int(selected["id"]), selected_dispatch_partner_id))
 				dispatch.custom_minimum_size.y = _ui_size(46)
 				_set_button_variant(dispatch, "action")
 				order_list.add_child(dispatch)
@@ -3369,6 +3528,8 @@ func _web_save_mirror() -> Dictionary:
 
 func _load_game(override_payload: Dictionary = {}) -> void:
 	selected_order = -1
+	selected_rider_id = -1
+	selected_dispatch_partner_id = -1
 	sheet_expanded = false
 	maplibre_initialized = false
 	browser_map_state.clear()
@@ -3502,6 +3663,8 @@ func _new_game(persist: bool = true) -> void:
 	paused = false
 	simulation_clock.set_paused(false)
 	selected_order = -1
+	selected_rider_id = -1
+	selected_dispatch_partner_id = -1
 	sheet_expanded = false
 	selected_tab = "Map"
 	selected_subtab = "City"
@@ -3515,7 +3678,9 @@ func _new_game(persist: bool = true) -> void:
 	followed_rider_id = -1
 	for index in STARTING_RIDERS:
 		var start_position := road_router.random_location_for_view(get_viewport_rect().size) if geographic_map_available and road_network_available else geographic_service.random_road_location(get_viewport_rect().size) if geographic_map_available else Vector2(0.5, 0.5)
-		var rider := {"id": next_rider_id, "status": "ready", "order_id": -1, "remaining": 0.0, "position": start_position}
+		var service_profile := player_company_service if player_company_service in IDMServicePricing.service_ids() else "parcel_logistics"
+		var vehicle_type := _partner_vehicle_for_service(service_profile)
+		var rider := {"id": next_rider_id, "status": "ready", "order_id": -1, "remaining": 0.0, "position": start_position, "vehicle_type": vehicle_type, "capacity": _partner_capacity_for_vehicle(vehicle_type), "service_eligibility": _partner_service_capabilities(vehicle_type, service_profile)}
 		if geographic_map_available:
 			var point_geo := geographic_service.uv_to_geo(start_position)
 			rider["latitude"] = point_geo.y
