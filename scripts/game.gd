@@ -728,16 +728,17 @@ func _build_ui() -> void:
 		var internal_tab: String = name
 		var button := _button("", func(): _set_tab(internal_tab))
 		button.tooltip_text = name
+		button.accessibility_name = name
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.custom_minimum_size = Vector2(0, ThemeService.control_height("standard"))
 		var nav_content := HBoxContainer.new()
 		nav_content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		nav_content.alignment = BoxContainer.ALIGNMENT_CENTER
-		nav_content.add_theme_constant_override("separation", 4)
+		nav_content.add_theme_constant_override("separation", 0)
 		nav_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		button.add_child(nav_content)
 		var icon := Control.new()
-		icon.custom_minimum_size = Vector2(18, 18)
+		icon.custom_minimum_size = Vector2(24, 24)
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		icon.draw.connect(func(): _draw_nav_icon(icon, internal_tab, button))
 		nav_content.add_child(icon)
@@ -746,6 +747,7 @@ func _build_ui() -> void:
 		nav_label.add_theme_font_size_override("font_size", ThemeService.font_size("caption"))
 		nav_label.add_theme_color_override("font_color", ThemeService.color("button_text"))
 		nav_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		nav_label.visible = false
 		nav_content.add_child(nav_label)
 		nav_buttons[internal_tab] = button
 		nav_labels[internal_tab] = nav_label
@@ -1106,7 +1108,8 @@ func _layout_ui() -> void:
 	var selected := _find_order(selected_order)
 	var order_detail_open: bool = selected_tab == "Map" and not selected.is_empty() and (selected["status"] == "Waiting" or str(selected["status"]).begins_with("On route"))
 	var map_collapsed := selected_tab == "Map" and not sheet_expanded
-	var nav_height: int = 68 if not is_landscape else 60
+	var full_page_tab := game_session_started and selected_tab != "Map" and not waiting_bookings_page_open and not main_menu_active
+	var nav_height: int = 60
 	var sheet_height: int = 260 if sheet_expanded else 104
 	if is_landscape:
 		sheet_height = 210 if sheet_expanded else 100
@@ -1160,7 +1163,7 @@ func _layout_ui() -> void:
 
 	bottom_nav.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	if is_desktop:
-		var nav_width := 456.0 * ui_layout_scale
+		var nav_width := 296.0 * ui_layout_scale
 		bottom_nav.offset_left = maxf(safe_left + 12 * ui_layout_scale, (viewport_size.x - nav_width) * 0.5)
 		bottom_nav.offset_right = -maxf(safe_right + 12 * ui_layout_scale, (viewport_size.x - nav_width) * 0.5)
 	else:
@@ -1179,7 +1182,14 @@ func _layout_ui() -> void:
 	bookings_button.custom_minimum_size = Vector2(148, 48) * ui_layout_scale
 	bookings_button.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
 	bookings_button.visible = game_session_started and selected_tab == "Map" and not main_menu_active and not waiting_bookings_page_open and not sheet_expanded
-	if map_collapsed:
+	if full_page_tab:
+		sheet.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		sheet.offset_left = (safe_left + 12.0) * ui_layout_scale
+		sheet.offset_right = -(safe_right + 12.0) * ui_layout_scale
+		sheet.offset_top = (safe_top + 12.0) * ui_layout_scale
+		sheet.offset_bottom = -(safe_bottom + (nav_height + 8.0) * ui_layout_scale)
+		sheet.add_theme_stylebox_override("panel", _panel_style("#07151f", 18))
+	elif map_collapsed:
 		sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
 		sheet.offset_left = -(safe_right + 176.0 * ui_layout_scale)
 		sheet.offset_right = -(safe_right + 12.0 * ui_layout_scale)
@@ -1205,11 +1215,12 @@ func _layout_ui() -> void:
 		sheet.offset_top = -safe_bottom - (nav_height + 8 + sheet_height) * ui_layout_scale
 		sheet.offset_bottom = -safe_bottom - (nav_height + 8) * ui_layout_scale
 		sheet.add_theme_stylebox_override("panel", _panel_style("#102433", 22))
-	sheet_handle_row.visible = not map_collapsed
+	sheet_handle_row.visible = not map_collapsed and not full_page_tab
 	sheet_header_row.visible = not map_collapsed
 	sheet_content.add_theme_constant_override("separation", 0 if map_collapsed else (3 if is_landscape and sheet_expanded else 6))
 
 	if is_instance_valid(sheet_toggle_button):
+		sheet_toggle_button.visible = selected_tab == "Map"
 		sheet_toggle_button.text = "Hide" if sheet_expanded else "Expand"
 		sheet_toggle_button.add_theme_font_size_override("font_size", int(round(15.0 * ui_scale)))
 	if is_instance_valid(sheet_header_label):
@@ -1250,7 +1261,14 @@ func _layout_ui() -> void:
 	if not main_menu_active:
 		bottom_nav.visible = game_session_started and not waiting_bookings_page_open
 		waiting_bookings_page.visible = waiting_bookings_page_open and game_session_started
-		sheet.visible = game_session_started and (selected_tab != "Map" or sheet_expanded or map_collapsed)
+		var map_page_active := game_session_started and selected_tab == "Map" and not waiting_bookings_page_open
+		map_view.visible = map_page_active
+		hud.visible = map_page_active
+		sim_controls.visible = map_page_active
+		map_controls.visible = map_page_active
+		bookings_button.visible = map_page_active and not sheet_expanded
+		sheet.visible = game_session_started and (full_page_tab or selected_tab == "Map" and (sheet_expanded or map_collapsed))
+		_set_map_dom_visible(map_page_active)
 	for tab in nav_buttons:
 		var nav_button: Button = nav_buttons[tab]
 		var selected_button: bool = tab == selected_tab
@@ -1920,6 +1938,7 @@ func _set_button_variant(button: Button, variant: String) -> void:
 func _draw_nav_icon(icon: Control, kind: String, button: Button) -> void:
 	var variant := str(button.get_meta("ui_variant", "default"))
 	var color := ThemeService.color("accent") if variant == "selected" else ThemeService.color("muted")
+	icon.draw_set_transform(Vector2.ZERO, 0.0, Vector2(1.5, 1.5))
 	var points: PackedVector2Array
 	match kind:
 		"Map":

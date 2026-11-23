@@ -54,6 +54,9 @@ jobs:
       - name: Verify floating bookings page and responsive placement
         run: godot --headless --path . --script tests/bookings_button_test.gd
 
+      - name: Verify icon-only full-page navigation
+        run: godot --headless --path . --script tests/full_page_navigation_test.gd
+
       - name: Run road routing and movement regression tests
         run: |
           node tests/map_overlay_layers_test.js
