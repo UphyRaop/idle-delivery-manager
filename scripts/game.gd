@@ -80,6 +80,7 @@ var sheet_body: ScrollContainer
 var sheet_toggle_button: Button
 var sheet_header_label: Label
 var map_controls: GridContainer
+var map_control_icons: Dictionary = {}
 var map_legend_button: Button
 var map_legend_panel: PanelContainer
 var map_legend_open := false
@@ -642,24 +643,16 @@ func _build_ui() -> void:
 	map_controls = GridContainer.new()
 	map_controls.columns = 1
 	map_controls.add_theme_constant_override("h_separation", 4)
-	map_controls.add_theme_constant_override("v_separation", 5)
+	map_controls.add_theme_constant_override("v_separation", 4)
 	add_child(map_controls)
-	var zoom_in := _button("+", func(): _zoom_map(1.25))
-	var zoom_out := _button("-", func(): _zoom_map(0.8))
-	var recenter := _button("Center", _recenter_map)
-	fit_route_button = _button("Fit", _fit_selected_booking)
-	follow_rider_button = _button("Follow", _follow_selected_rider)
-	map_legend_button = _button("Key", _toggle_map_legend)
-	zoom_in.tooltip_text = "Zoom in"
-	zoom_out.tooltip_text = "Zoom out"
-	recenter.tooltip_text = "Center map"
-	fit_route_button.tooltip_text = "Fit selected booking or active route"
-	follow_rider_button.tooltip_text = "Follow selected delivery partner"
-	map_legend_button.tooltip_text = "Show the map marker legend"
-	for control in [zoom_in, zoom_out, recenter, fit_route_button, follow_rider_button, map_legend_button]:
-		control.custom_minimum_size = Vector2(64, ThemeService.control_height("compact"))
-		control.add_theme_font_size_override("font_size", ThemeService.font_size("caption"))
-		map_controls.add_child(control)
+	map_controls.add_theme_constant_override("h_separation", 5)
+	map_control_icons.clear()
+	_add_map_control("ZoomIn", "zoom_in", "Zoom in", func(): _zoom_map(1.25))
+	_add_map_control("ZoomOut", "zoom_out", "Zoom out", func(): _zoom_map(0.8))
+	_add_map_control("Center", "center", "Center map", _recenter_map)
+	fit_route_button = _add_map_control("FitRoute", "fit", "Fit selected booking or active route", _fit_selected_booking)
+	follow_rider_button = _add_map_control("FollowRider", "follow", "Follow selected delivery partner", _follow_selected_rider)
+	map_legend_button = _add_map_control("Legend", "legend", "Show the map marker legend", _toggle_map_legend)
 	_build_map_legend()
 
 	sheet = PanelContainer.new()
@@ -762,6 +755,96 @@ func _panel_style(color: String, radius: int) -> StyleBoxFlat:
 	style.border_color = ThemeService.color("panel_border")
 	return style
 
+func _add_map_control(control_name: String, icon_name: String, accessible_label: String, callback: Callable) -> Button:
+	var button := _button("", callback)
+	button.name = control_name
+	button.tooltip_text = accessible_label
+	button.accessibility_name = accessible_label
+	button.set_meta("accessible_label", accessible_label)
+	button.set_meta("icon_name", icon_name)
+	button.custom_minimum_size = Vector2(48, 48)
+	button.add_theme_constant_override("icon_max_width", 24)
+	_set_button_variant(button, "quiet")
+	var icon := Control.new()
+	icon.name = "MapControlIcon"
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	icon.draw.connect(func(): _draw_map_control_icon(icon, icon_name))
+	button.add_child(icon)
+	map_controls.add_child(button)
+	map_control_icons[icon_name] = icon
+	return button
+
+func _map_control_layout_for(size: Vector2, insets: Vector4, layout_scale: float) -> Dictionary:
+	var landscape := size.x > size.y
+	var columns := 3 if landscape else 1
+	var rows := 2 if landscape else 6
+	var side := 48.0 * layout_scale
+	var gap := 5.0 * layout_scale
+	var width := float(columns) * side + float(columns - 1) * gap
+	var height := float(rows) * side + float(rows - 1) * gap
+	var top := 116.0 if landscape else 142.0
+	# In landscape the booking sheet is a right-side card. Align the controls
+	# with the exposed map edge just to its left; portrait uses the right edge.
+	var right_inset := insets.z + 12.0 * layout_scale
+	if landscape:
+		right_inset += (352.0 + 12.0) * layout_scale
+	return {
+		"columns": columns,
+		"left": -(right_inset + width),
+		"right": -right_inset,
+		"top": insets.y + top * layout_scale,
+		"bottom": insets.y + top * layout_scale + height,
+		"width": width,
+		"height": height,
+		"button_size": side,
+		"gap": gap,
+	}
+
+func _draw_map_control_icon(icon: Control, icon_name: String) -> void:
+	var side := minf(icon.size.x, icon.size.y)
+	if side <= 0.0:
+		return
+	var center := icon.size * 0.5
+	var scale_factor := side / 24.0
+	var stroke := 1.8 * scale_factor
+	var color := ThemeService.color("button_text")
+	var line := func(from: Vector2, to: Vector2) -> void: icon.draw_line(from, to, color, stroke, true)
+	match icon_name:
+		"zoom_in", "zoom_out":
+			var radius := side * 0.27
+			icon.draw_arc(center - Vector2(side * 0.04, side * 0.04), radius, 0.0, TAU, 28, color, stroke, true)
+			line.call(center + Vector2(side * 0.16, side * 0.16), center + Vector2(side * 0.37, side * 0.37))
+			line.call(center + Vector2(-side * 0.16, -side * 0.04), center + Vector2(side * 0.08, -side * 0.04))
+			if icon_name == "zoom_in":
+				line.call(center + Vector2(-side * 0.04, -side * 0.16), center + Vector2(-side * 0.04, side * 0.08))
+		"center":
+			icon.draw_arc(center, side * 0.20, 0.0, TAU, 24, color, stroke, true)
+			icon.draw_circle(center, side * 0.055, color)
+			line.call(center + Vector2(0, -side * 0.40), center + Vector2(0, -side * 0.27))
+			line.call(center + Vector2(0, side * 0.27), center + Vector2(0, side * 0.40))
+			line.call(center + Vector2(-side * 0.40, 0), center + Vector2(-side * 0.27, 0))
+			line.call(center + Vector2(side * 0.27, 0), center + Vector2(side * 0.40, 0))
+		"fit":
+			var low := side * 0.20
+			var high := side * 0.43
+			for corner_value in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
+				var corner: Vector2 = corner_value
+				var origin := center + corner * low
+				line.call(origin, center + Vector2(corner.x * high, corner.y * low))
+				line.call(origin, center + Vector2(corner.x * low, corner.y * high))
+		"follow":
+			icon.draw_arc(center, side * 0.31, deg_to_rad(35.0), deg_to_rad(325.0), 28, color, stroke, true)
+			icon.draw_circle(center, side * 0.085, color)
+			line.call(center + Vector2(side * 0.18, -side * 0.24), center + Vector2(side * 0.36, -side * 0.39))
+			line.call(center + Vector2(side * 0.36, -side * 0.39), center + Vector2(side * 0.33, -side * 0.22))
+			line.call(center + Vector2(side * 0.36, -side * 0.39), center + Vector2(side * 0.20, -side * 0.37))
+		"legend":
+			for row in range(3):
+				var y := center.y + (float(row) - 1.0) * side * 0.24
+				icon.draw_circle(Vector2(center.x - side * 0.23, y), side * 0.055, color)
+				line.call(Vector2(center.x - side * 0.08, y), Vector2(center.x + side * 0.36, y))
+
 func _build_map_legend() -> void:
 	map_legend_panel = PanelContainer.new()
 	map_legend_panel.name = "MapMarkerLegend"
@@ -802,6 +885,8 @@ func _toggle_map_legend() -> void:
 	map_legend_open = not map_legend_open
 	if is_instance_valid(map_legend_button):
 		map_legend_button.tooltip_text = "Hide map marker legend" if map_legend_open else "Show the map marker legend"
+		map_legend_button.accessibility_name = map_legend_button.tooltip_text
+		map_legend_button.set_meta("accessible_label", map_legend_button.tooltip_text)
 		_set_button_variant(map_legend_button, "action" if map_legend_open else "quiet")
 	_update_map_legend_visibility()
 	_layout_map_legend()
@@ -815,8 +900,7 @@ func _layout_map_legend() -> void:
 		return
 	var panel_width := minf(252.0, maxf(176.0, viewport_size.x - safe_insets.x - safe_insets.z - 24.0))
 	var panel_height := minf(246.0, maxf(188.0, viewport_size.y - safe_insets.y - safe_insets.w - 32.0))
-	var is_landscape := viewport_size.x > viewport_size.y
-	var x := safe_insets.x + (160.0 if is_landscape else 12.0)
+	var x := safe_insets.x + 12.0
 	if x + panel_width > viewport_size.x - safe_insets.z - 8.0:
 		x = viewport_size.x - safe_insets.z - panel_width - 8.0
 	var y := maxf(safe_insets.y + 12.0, (viewport_size.y - panel_height) * 0.5)
@@ -870,11 +954,11 @@ func _layout_ui() -> void:
 	safe_insets = Vector4(safe_insets_css.x * css_to_ui_x, safe_insets_css.y * css_to_ui_y, safe_insets_css.z * css_to_ui_x, safe_insets_css.w * css_to_ui_y)
 	for speed_button in speed_buttons.values():
 		speed_button.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
-	for map_control in map_controls.get_children():
-		map_control.add_theme_font_size_override("font_size", int(round((13.0 if map_control.text in ["Center", "Fit", "Follow"] else 20.0) * ui_scale)))
 	if is_instance_valid(follow_rider_button):
-		follow_rider_button.text = "Stop" if map_camera.follow_enabled else "Follow"
 		follow_rider_button.tooltip_text = "Exit rider follow mode" if map_camera.follow_enabled else "Follow selected delivery partner"
+		follow_rider_button.accessibility_name = follow_rider_button.tooltip_text
+		follow_rider_button.set_meta("accessible_label", follow_rider_button.tooltip_text)
+		_set_button_variant(follow_rider_button, "action" if map_camera.follow_enabled else "quiet")
 	for nav_button in nav_buttons.values():
 		nav_button.add_theme_font_size_override("font_size", int(round(12.0 * ui_scale)))
 	for tab in nav_labels:
@@ -932,18 +1016,18 @@ func _layout_ui() -> void:
 	for speed_button in speed_buttons.values():
 		speed_button.custom_minimum_size = Vector2(segment_width, 44.0 * ui_layout_scale)
 
-	# The compact landscape sheet sits over the right side of the map. Keep
-	# zoom/recenter controls on the left in both compact and expanded states.
-	var controls_on_left := is_landscape
-	map_controls.columns = 2 if is_landscape else 1
-	map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT if controls_on_left else Control.PRESET_TOP_RIGHT)
-	map_controls.offset_left = safe_left + 12 * ui_layout_scale if controls_on_left else -safe_right - 78 * ui_layout_scale
-	map_controls.offset_right = safe_left + 150 * ui_layout_scale if controls_on_left else -safe_right - 12 * ui_layout_scale
-	map_controls.offset_top = safe_top + 142 * ui_layout_scale
-	map_controls.offset_bottom = safe_top + (302 if is_landscape else 460) * ui_layout_scale
-	for index in range(map_controls.get_child_count()):
-		var map_control: Button = map_controls.get_child(index)
-		map_control.custom_minimum_size = Vector2(maxf(58.0, 64.0 * ui_layout_scale), maxf(44.0, ThemeService.control_height("compact") * ui_layout_scale))
+	# Put the six individual controls against the right map edge. Landscape
+	# uses two rows so they fit above the bottom sheet without obscuring it.
+	var control_layout := _map_control_layout_for(viewport_size, safe_insets, ui_layout_scale)
+	map_controls.columns = int(control_layout["columns"])
+	map_controls.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	map_controls.offset_left = float(control_layout["left"])
+	map_controls.offset_right = float(control_layout["right"])
+	map_controls.offset_top = float(control_layout["top"])
+	map_controls.offset_bottom = float(control_layout["bottom"])
+	for map_control in map_controls.get_children():
+		(map_control as Button).custom_minimum_size = Vector2.ONE * float(control_layout["button_size"])
+	map_controls.queue_sort()
 	_layout_map_legend()
 	_update_map_legend_visibility()
 
@@ -1564,8 +1648,10 @@ func _stop_follow_for_manual_gesture() -> void:
 func _update_follow_button() -> void:
 	if not is_instance_valid(follow_rider_button):
 		return
-	follow_rider_button.text = "Stop" if map_camera.follow_enabled else "Follow"
 	follow_rider_button.tooltip_text = "Exit rider follow mode" if map_camera.follow_enabled else "Follow selected delivery partner"
+	follow_rider_button.accessibility_name = follow_rider_button.tooltip_text
+	follow_rider_button.set_meta("accessible_label", follow_rider_button.tooltip_text)
+	_set_button_variant(follow_rider_button, "action" if map_camera.follow_enabled else "quiet")
 
 func _select_marker(point: Vector2) -> void:
 	if _maplibre_active():
@@ -1646,6 +1732,9 @@ func _set_button_variant(button: Button, variant: String) -> void:
 	button.add_theme_stylebox_override("pressed", pressed)
 	button.add_theme_color_override("font_color", Color("#04252d") if variant in ["action", "speed_selected"] else ThemeService.color("button_text"))
 	for icon in nav_icons.values():
+		if is_instance_valid(icon):
+			icon.queue_redraw()
+	for icon in map_control_icons.values():
 		if is_instance_valid(icon):
 			icon.queue_redraw()
 
